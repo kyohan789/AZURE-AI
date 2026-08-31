@@ -59,6 +59,7 @@ echo ""
 
 # 5. 29 个完整模型列表配置 ("部署名|模型名|版本|容量")
 ALL_MODELS=(
+  "gpt-5.5|gpt-5.5|2026-04-24|1000"
   "gpt-image-2|gpt-image-2|2026-04-21|2"
   "gpt-image-1.5|gpt-image-1.5|2025-12-16|9"
   "gpt-image-1|gpt-image-1|2025-04-15|3"
