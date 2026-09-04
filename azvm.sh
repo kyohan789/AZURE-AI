@@ -12,7 +12,7 @@ ALLOWED_REGIONS=($(az policy assignment list \
 # 区域选择菜单（支持多选）
 # ==========================================================================
 echo "=========================================================================="
-echo " 请选择要部署的目标区域（支持多选，用空格或逗号分隔，如: 1 3 或 1,2,4）："
+echo " 请选择要部署的目标区域（支持多选，用空格或逗号分隔，如: 3 4 或 1,3）："
 echo " [1] 美西组 (westus, westus2, westus3) [默认]"
 echo " [2] 日本组 (japaneast, japanwest)"
 
@@ -28,19 +28,21 @@ if [ ${#ALLOWED_REGIONS[@]} -gt 0 ]; then
     done
 fi
 echo "=========================================================================="
-read -p "请输入选项 [默认: 1]: " choices
+read -p "请输入选项 [默认: 1]: " user_input
 
-# 若直接按回车，默认为 1
-if [ -z "$choices" ]; then
-    choices="1"
+# 1. 默认值处理
+if [ -z "$user_input" ]; then
+    user_input="1"
 fi
 
-# 将逗号替换为空格并转为数组进行多选解析
-choices=$(echo "$choices" | tr ',' ' ')
+# 2. 将逗号统一替换为空格，避免粘连
+clean_input=$(echo "$user_input" | tr ',' ' ')
+
 SELECTED_REGIONS=()
 
-for choice in $choices; do
-    case "$choice" in
+# 3. 遍历拆分后的每一个选项，逐个匹配
+for item in $clean_input; do
+    case "$item" in
         1)
             SELECTED_REGIONS+=("westus" "westus2" "westus3")
             ;;
@@ -48,25 +50,27 @@ for choice in $choices; do
             SELECTED_REGIONS+=("japaneast" "japanwest")
             ;;
         *)
-            if [ -n "${DYNAMIC_OPTIONS[$choice]}" ]; then
-                SELECTED_REGIONS+=("${DYNAMIC_OPTIONS[$choice]}")
+            if [ -n "${DYNAMIC_OPTIONS[$item]}" ]; then
+                SELECTED_REGIONS+=("${DYNAMIC_OPTIONS[$item]}")
             else
-                echo "⚠️ 忽略无效选项: $choice"
+                echo "⚠️ 忽略未识别的无效选项: $item"
             fi
             ;;
     esac
 done
 
-# 如果输入全无效，默认选 1
+# 4. 兜底处理：如果解析后没有任何有效区域，退回默认美西
 if [ ${#SELECTED_REGIONS[@]} -eq 0 ]; then
     echo "⚠️ 未匹配到有效选项，默认使用美西组！"
     SELECTED_REGIONS=("westus" "westus2" "westus3")
 fi
 
-# 数组去重
+# 5. 数组去重
 REGIONS=($(echo "${SELECTED_REGIONS[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
 
+# ==========================================================================
 # 1. 定义部署机型与镜像配置
+# ==========================================================================
 SKUS=("Standard_B1s" "Standard_B2ats_v2" "Standard_B2pts_v2")
 
 ADMIN_USER="aaa"
@@ -80,7 +84,9 @@ IMAGE_ARM64="Canonical:ubuntu-26_04-lts:server-arm64:latest"
 RESULT_DIR=$(mktemp -d)
 trap 'rm -rf "$RESULT_DIR"' EXIT
 
+# ==========================================================================
 # 2. 单个 VM 的完整创建函数
+# ==========================================================================
 deploy_vm() {
     local loc=$1
     local sku=$2
@@ -95,7 +101,7 @@ deploy_vm() {
     vm_name="vm-${res_name}"
     nsg_name="${vm_name}NSG"
 
-    # 选择架构镜像
+    # 根据机型选择架构镜像
     if [[ "$sku" == *"pts"* ]]; then
         current_image="$IMAGE_ARM64"
     else
@@ -104,7 +110,7 @@ deploy_vm() {
 
     echo "▶️  [开始] 区域: $loc | 机型: $sku (资源组: $rg_name)"
 
-    # 1. 创建带随机后缀的资源组
+    # 1. 创建带随机后缀的独立资源组
     az group create \
       --name "$rg_name" \
       --location "$loc" \
@@ -122,9 +128,9 @@ deploy_vm() {
       --os-disk-size-gb 64 \
       -o none 2>&1
 
-    # 判断 VM 是否创建成功
+    # 3. 状态校验与后续操作
     if [ $? -eq 0 ]; then
-        # 3. 创建开放全部端口的 NSG 规则
+        # 创建全开放 NSG 规则
         az network nsg rule create \
           --resource-group "$rg_name" \
           --nsg-name "$nsg_name" \
@@ -141,14 +147,12 @@ deploy_vm() {
           -o none 2>&1
 
         echo "✅ [成功] $vm_name 部署完成！"
-        # 记录成功信息
         echo "$vm_name (区域: $loc, 机型: $sku, 资源组: $rg_name)" >> "$RESULT_DIR/success.log"
     else
         echo "❌ [失败] $vm_name 创建失败！正在后台清理/删除空资源组: $rg_name ..."
-        # 记录失败信息
         echo "$vm_name (区域: $loc, 机型: $sku)" >> "$RESULT_DIR/failed.log"
         
-        # 失败时立即清理该资源组 (--no-wait 不阻塞当前脚本)
+        # 失败时立即后台异步清理空资源组
         az group delete \
           --name "$rg_name" \
           --yes \
@@ -174,7 +178,7 @@ for loc in "${REGIONS[@]}"; do
     done
 done
 
-# 4. 等待所有后台任务完成
+# 4. 等待所有后台任务执行完毕
 echo "⏳ 所有任务已投递，正在后台并发建机中，请稍候..."
 wait
 
