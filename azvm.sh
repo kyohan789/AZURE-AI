@@ -76,6 +76,10 @@ ADMIN_PASS='EApBqz9kJfYUmwLujMku'
 IMAGE_X86="Canonical:ubuntu-26_04-lts:server:latest"
 IMAGE_ARM64="Canonical:ubuntu-26_04-lts:server-arm64:latest"
 
+# 临时结果记录目录 (用于跨子进程汇总)
+RESULT_DIR=$(mktemp -d)
+trap 'rm -rf "$RESULT_DIR"' EXIT
+
 # 2. 单个 VM 的完整创建函数
 deploy_vm() {
     local loc=$1
@@ -137,8 +141,12 @@ deploy_vm() {
           -o none 2>&1
 
         echo "✅ [成功] $vm_name 部署完成！"
+        # 记录成功信息
+        echo "$vm_name (区域: $loc, 机型: $sku, 资源组: $rg_name)" >> "$RESULT_DIR/success.log"
     else
         echo "❌ [失败] $vm_name 创建失败！正在后台清理/删除空资源组: $rg_name ..."
+        # 记录失败信息
+        echo "$vm_name (区域: $loc, 机型: $sku)" >> "$RESULT_DIR/failed.log"
         
         # 失败时立即清理该资源组 (--no-wait 不阻塞当前脚本)
         az group delete \
@@ -151,7 +159,7 @@ deploy_vm() {
 
 # 导出函数及变量供子进程调用
 export -f deploy_vm
-export ADMIN_USER ADMIN_PASS IMAGE_X86 IMAGE_ARM64
+export ADMIN_USER ADMIN_PASS IMAGE_X86 IMAGE_ARM64 RESULT_DIR
 
 total_tasks=$((${#REGIONS[@]} * ${#SKUS[@]}))
 echo "=========================================================================="
@@ -173,3 +181,37 @@ wait
 echo "=========================================================================="
 echo "🎉 所有并发部署任务已全部执行完毕！"
 echo "=========================================================================="
+
+# ==========================================================================
+# 5. 汇总与统计结果
+# ==========================================================================
+touch "$RESULT_DIR/success.log" "$RESULT_DIR/failed.log"
+success_count=$(wc -l < "$RESULT_DIR/success.log" | tr -d ' ')
+failed_count=$(wc -l < "$RESULT_DIR/failed.log" | tr -d ' ')
+
+echo ""
+echo "📊 ================== 部署结果统计 =================="
+echo "   总任务数: $total_tasks"
+echo "   ✅ 成功数: $success_count"
+echo "   ❌ 失败数: $failed_count"
+echo "======================================================"
+
+if [ "$success_count" -gt 0 ]; then
+    echo -e "\n🟢 成功创建的虚拟机列表:"
+    idx=1
+    while IFS= read -r line; do
+        echo "   [$idx] $line"
+        ((idx++))
+    done < "$RESULT_DIR/success.log"
+fi
+
+if [ "$failed_count" -gt 0 ]; then
+    echo -e "\n🔴 创建失败的虚拟机列表:"
+    idx=1
+    while IFS= read -r line; do
+        echo "   [$idx] $line"
+        ((idx++))
+    done < "$RESULT_DIR/failed.log"
+fi
+
+echo -e "\n🏁 汇总完毕！"
