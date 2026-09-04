@@ -78,7 +78,6 @@ if [ "$main_mode" == "2" ]; then
         done
     fi
 
-    # 去重
     TARGET_RGS=($(echo "${TARGET_RGS[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
 
     if [ ${#TARGET_RGS[@]} -eq 0 ]; then
@@ -132,7 +131,6 @@ echo " [1] 美西组 (westus, westus2, westus3) [默认]"
 echo " [2] 日本组 (japaneast, japanwest)"
 if [ "$reg_count" -gt 0 ]; then
     echo " [3] 所有受限区域 (一键部署所有受限区域: ${ALLOWED_REGIONS[*]})"
-    # 单个区域从 4 开始往后顺延
     for ((i=0; i<reg_count; i++)); do
         opt_num=$((i + 4))
         echo " [$opt_num] 受限区域: ${ALLOWED_REGIONS[$i]}"
@@ -141,27 +139,21 @@ fi
 echo "=========================================================================="
 read -r -p "请输入选项 [默认: 1]: " user_input
 
-# 1. 默认值处理
 if [ -z "$user_input" ]; then
     user_input="1"
 fi
 
-# 2. 清洗输入
 clean_input=$(echo "$user_input" | tr -d '\r' | tr ',' ' ')
-
 SELECTED_REGIONS=()
 
-# 3. 逐个解析选项
 for item in $clean_input; do
     if [ "$item" == "1" ]; then
         SELECTED_REGIONS+=("westus" "westus2" "westus3")
     elif [ "$item" == "2" ]; then
         SELECTED_REGIONS+=("japaneast" "japanwest")
     elif [ "$item" == "3" ] && [ "$reg_count" -gt 0 ]; then
-        # 选项 3 代表包含所有受限区域
         SELECTED_REGIONS+=("${ALLOWED_REGIONS[@]}")
     elif [[ "$item" =~ ^[0-9]+$ ]] && [ "$reg_count" -gt 0 ]; then
-        # 单个受限区域下标对应: item - 4
         target_idx=$((item - 4))
         if [ "$target_idx" -ge 0 ] && [ "$target_idx" -lt "$reg_count" ]; then
             SELECTED_REGIONS+=("${ALLOWED_REGIONS[$target_idx]}")
@@ -174,17 +166,66 @@ for item in $clean_input; do
     fi
 done
 
-# 4. 兜底处理
 if [ ${#SELECTED_REGIONS[@]} -eq 0 ]; then
     echo "⚠️ 未匹配到有效选项，默认使用美西组！"
     SELECTED_REGIONS=("westus" "westus2" "westus3")
 fi
 
-# 5. 数组去重
 REGIONS=($(echo "${SELECTED_REGIONS[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
 
-# 定义部署机型与镜像配置
-SKUS=("Standard_B1s" "Standard_B2ats_v2" "Standard_B2pts_v2")
+# ==========================================================================
+# 机型选择菜单：支持默认 3 款基础机型，支持单独勾选各规格 Fas_v7
+# ==========================================================================
+echo "=========================================================================="
+echo " 请选择要部署的机型（支持多选，用空格或逗号分隔，如: 2 4 或 1,5）："
+echo " [1] 基础三机型 (Standard_B1s, Standard_B2ats_v2, Standard_B2pts_v2) [默认]"
+echo " [2] Standard_F2as_v7  (2核 8G  AMD Zen 5 全核无超线程)"
+echo " [3] Standard_F4as_v7  (4核 16G AMD Zen 5 全核无超线程)"
+echo " [4] Standard_F8as_v7  (8核 32G AMD Zen 5 全核无超线程)"
+echo " [5] Standard_F16as_v7 (16核 64G AMD Zen 5 全核无超线程)"
+echo " [6] Standard_F32as_v7 (32核 128G AMD Zen 5 全核无超线程)"
+echo "=========================================================================="
+read -r -p "请输入机型选项 [默认: 1]: " sku_input
+
+if [ -z "$sku_input" ]; then
+    sku_input="1"
+fi
+
+clean_sku_input=$(echo "$sku_input" | tr -d '\r' | tr ',' ' ')
+SELECTED_SKUS=()
+
+for s_item in $clean_sku_input; do
+    case "$s_item" in
+        1)
+            SELECTED_SKUS+=("Standard_B1s" "Standard_B2ats_v2" "Standard_B2pts_v2")
+            ;;
+        2)
+            SELECTED_SKUS+=("Standard_F2as_v7")
+            ;;
+        3)
+            SELECTED_SKUS+=("Standard_F4as_v7")
+            ;;
+        4)
+            SELECTED_SKUS+=("Standard_F8as_v7")
+            ;;
+        5)
+            SELECTED_SKUS+=("Standard_F16as_v7")
+            ;;
+        6)
+            SELECTED_SKUS+=("Standard_F32as_v7")
+            ;;
+        *)
+            echo "⚠️ 忽略无效机型选项: $s_item"
+            ;;
+    esac
+done
+
+if [ ${#SELECTED_SKUS[@]} -eq 0 ]; then
+    echo "⚠️ 未匹配到有效机型，默认使用基础三机型！"
+    SELECTED_SKUS=("Standard_B1s" "Standard_B2ats_v2" "Standard_B2pts_v2")
+fi
+
+SKUS=($(echo "${SELECTED_SKUS[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
 
 ADMIN_USER="aaa"
 ADMIN_PASS='EApBqz9kJfYUmwLujMku'
@@ -193,7 +234,6 @@ ADMIN_PASS='EApBqz9kJfYUmwLujMku'
 IMAGE_X86="Canonical:ubuntu-26_04-lts:server:latest"
 IMAGE_ARM64="Canonical:ubuntu-26_04-lts:server-arm64:latest"
 
-# 临时结果记录目录
 RESULT_DIR=$(mktemp -d)
 trap 'rm -rf "$RESULT_DIR"' EXIT
 
@@ -201,7 +241,6 @@ deploy_vm() {
     local loc=$1
     local sku=$2
 
-    # 生成 5 位随机小写字母和数字组合
     rand_suffix=$(cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 5 | head -n 1)
 
     sku_clean=$(echo "$sku" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
@@ -210,7 +249,7 @@ deploy_vm() {
     vm_name="vm-${res_name}"
     nsg_name="${vm_name}NSG"
 
-    # 选择架构镜像
+    # 选择架构镜像 (pts 系列为 ARM64，其余 B 系列及 Fas_v7 均走 x86_64)
     if [[ "$sku" == *"pts"* ]]; then
         current_image="$IMAGE_ARM64"
     else
@@ -274,17 +313,16 @@ export ADMIN_USER ADMIN_PASS IMAGE_X86 IMAGE_ARM64 RESULT_DIR
 total_tasks=$((${#REGIONS[@]} * ${#SKUS[@]}))
 echo "=========================================================================="
 echo "🚀 已选定目标区域: ${REGIONS[*]}"
+echo "🚀 已选定目标机型: ${SKUS[*]}"
 echo "🚀 正在并发启动共 $total_tasks 个 VM 的部署流程..."
 echo "=========================================================================="
 
-# 双重循环并发启动建机任务
 for loc in "${REGIONS[@]}"; do
     for sku in "${SKUS[@]}"; do
         deploy_vm "$loc" "$sku" &
     done
 done
 
-# 等待所有建机任务执行完毕
 echo "⏳ 所有任务已投递，正在后台并发建机中，请稍候..."
 wait
 
