@@ -1,12 +1,17 @@
 #!/bin/bash
 
 # ==========================================================================
-# 0. 检查依赖与动态读取策略受限区域
+# 0. 动态读取策略受限区域列表（过滤 Windows 换行符 \r）
 # ==========================================================================
 echo "🔍 正在检查 Azure 策略受限区域..."
-ALLOWED_REGIONS=($(az policy assignment list \
-  --query "[?name=='sys.regionrestriction'].parameters.listOfAllowedLocations.value[]" \
-  -o tsv 2>/dev/null))
+ALLOWED_REGIONS=()
+raw_output=$(az policy assignment list \
+  --query "[?name=='sys.regionrestriction'].parameters.listOfAllowedLocations.value" \
+  -o tsv 2>/dev/null | tr -d '\r')
+
+for r in $raw_output; do
+    [ -n "$r" ] && ALLOWED_REGIONS+=("$r")
+done
 
 # ==========================================================================
 # 区域选择菜单（支持多选）
@@ -16,50 +21,47 @@ echo " 请选择要部署的目标区域（支持多选，用空格或逗号分�
 echo " [1] 美西组 (westus, westus2, westus3) [默认]"
 echo " [2] 日本组 (japaneast, japanwest)"
 
-# 动态生成策略受限区域选项（从序号 3 开始）
-option_idx=3
-declare -A DYNAMIC_OPTIONS
-
-if [ ${#ALLOWED_REGIONS[@]} -gt 0 ]; then
-    for reg in "${ALLOWED_REGIONS[@]}"; do
-        echo " [$option_idx] 受限区域: $reg"
-        DYNAMIC_OPTIONS["$option_idx"]="$reg"
-        ((option_idx++))
+# 动态打印策略受限区域选项（从序号 3 开始）
+reg_count=${#ALLOWED_REGIONS[@]}
+if [ "$reg_count" -gt 0 ]; then
+    for ((i=0; i<reg_count; i++)); do
+        opt_num=$((i + 3))
+        echo " [$opt_num] 受限区域: ${ALLOWED_REGIONS[$i]}"
     done
 fi
 echo "=========================================================================="
-read -p "请输入选项 [默认: 1]: " user_input
+read -r -p "请输入选项 [默认: 1]: " user_input
 
-# 1. 默认值处理
+# 1. 默认值处理（回车默认 1）
 if [ -z "$user_input" ]; then
     user_input="1"
 fi
 
-# 2. 将逗号统一替换为空格，避免粘连
-clean_input=$(echo "$user_input" | tr ',' ' ')
+# 2. 清洗输入（去 \r，逗号替换为空格）
+clean_input=$(echo "$user_input" | tr -d '\r' | tr ',' ' ')
 
 SELECTED_REGIONS=()
 
-# 3. 遍历拆分后的每一个选项，逐个匹配
+# 3. 逐个解析选项（纯数组下标匹配，彻底抛弃关联数组）
 for item in $clean_input; do
-    case "$item" in
-        1)
-            SELECTED_REGIONS+=("westus" "westus2" "westus3")
-            ;;
-        2)
-            SELECTED_REGIONS+=("japaneast" "japanwest")
-            ;;
-        *)
-            if [ -n "${DYNAMIC_OPTIONS[$item]}" ]; then
-                SELECTED_REGIONS+=("${DYNAMIC_OPTIONS[$item]}")
-            else
-                echo "⚠️ 忽略未识别的无效选项: $item"
-            fi
-            ;;
-    esac
+    if [ "$item" == "1" ]; then
+        SELECTED_REGIONS+=("westus" "westus2" "westus3")
+    elif [ "$item" == "2" ]; then
+        SELECTED_REGIONS+=("japaneast" "japanwest")
+    elif [[ "$item" =~ ^[0-9]+$ ]]; then
+        target_idx=$((item - 3))
+        if [ "$target_idx" -ge 0 ] && [ "$target_idx" -lt "$reg_count" ]; then
+            SELECTED_REGIONS+=("${ALLOWED_REGIONS[$target_idx]}")
+        else
+            max_opt=$((reg_count + 2))
+            echo "⚠️ 选项 $item 超出范围 (有效选项: 1 - $max_opt)"
+        fi
+    else
+        echo "⚠️ 忽略无效输入: $item"
+    fi
 done
 
-# 4. 兜底处理：如果解析后没有任何有效区域，退回默认美西
+# 4. 兜底处理
 if [ ${#SELECTED_REGIONS[@]} -eq 0 ]; then
     echo "⚠️ 未匹配到有效选项，默认使用美西组！"
     SELECTED_REGIONS=("westus" "westus2" "westus3")
