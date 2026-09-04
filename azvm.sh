@@ -9,10 +9,10 @@ ALLOWED_REGIONS=($(az policy assignment list \
   -o tsv 2>/dev/null))
 
 # ==========================================================================
-# 区域选择菜单
+# 区域选择菜单（支持多选）
 # ==========================================================================
 echo "=========================================================================="
-echo " 请选择要部署的目标区域组："
+echo " 请选择要部署的目标区域（支持多选，用空格或逗号分隔，如: 1 3 或 1,2,4）："
 echo " [1] 美西组 (westus, westus2, westus3) [默认]"
 echo " [2] 日本组 (japaneast, japanwest)"
 
@@ -28,24 +28,43 @@ if [ ${#ALLOWED_REGIONS[@]} -gt 0 ]; then
     done
 fi
 echo "=========================================================================="
-read -p "请输入选项 [默认: 1]: " choice
+read -p "请输入选项 [默认: 1]: " choices
 
-# 处理选项匹配
-if [ -z "$choice" ] || [ "$choice" == "1" ]; then
-    REGIONS=("westus" "westus2" "westus3")
-    group_name="美西组 (westus, westus2, westus3)"
-elif [ "$choice" == "2" ]; then
-    REGIONS=("japaneast" "japanwest")
-    group_name="日本组 (japaneast, japanwest)"
-elif [ -n "${DYNAMIC_OPTIONS[$choice]}" ]; then
-    target_region="${DYNAMIC_OPTIONS[$choice]}"
-    REGIONS=("$target_region")
-    group_name="策略受限区域 ($target_region)"
-else
-    echo "⚠️ 输入无效，默认使用美西组！"
-    REGIONS=("westus" "westus2" "westus3")
-    group_name="美西组 (westus, westus2, westus3)"
+# 若直接按回车，默认为 1
+if [ -z "$choices" ]; then
+    choices="1"
 fi
+
+# 将逗号替换为空格并转为数组进行多选解析
+choices=$(echo "$choices" | tr ',' ' ')
+SELECTED_REGIONS=()
+
+for choice in $choices; do
+    case "$choice" in
+        1)
+            SELECTED_REGIONS+=("westus" "westus2" "westus3")
+            ;;
+        2)
+            SELECTED_REGIONS+=("japaneast" "japanwest")
+            ;;
+        *)
+            if [ -n "${DYNAMIC_OPTIONS[$choice]}" ]; then
+                SELECTED_REGIONS+=("${DYNAMIC_OPTIONS[$choice]}")
+            else
+                echo "⚠️ 忽略无效选项: $choice"
+            fi
+            ;;
+    esac
+done
+
+# 如果输入全无效，默认选 1
+if [ ${#SELECTED_REGIONS[@]} -eq 0 ]; then
+    echo "⚠️ 未匹配到有效选项，默认使用美西组！"
+    SELECTED_REGIONS=("westus" "westus2" "westus3")
+fi
+
+# 数组去重
+REGIONS=($(echo "${SELECTED_REGIONS[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
 
 # 1. 定义部署机型与镜像配置
 SKUS=("Standard_B1s" "Standard_B2ats_v2" "Standard_B2pts_v2")
@@ -136,7 +155,7 @@ export ADMIN_USER ADMIN_PASS IMAGE_X86 IMAGE_ARM64
 
 total_tasks=$((${#REGIONS[@]} * ${#SKUS[@]}))
 echo "=========================================================================="
-echo "🚀 目标区域: $group_name"
+echo "🚀 已选定目标区域: ${REGIONS[*]}"
 echo "🚀 正在并发启动共 $total_tasks 个 VM 的部署流程..."
 echo "=========================================================================="
 
