@@ -1,9 +1,98 @@
 #!/bin/bash
 
 # ==========================================================================
-# 0. 动态读取策略受限区域列表（过滤 Windows 换行符 \r）
+# 主功能菜单：创建 VM 或 删除资源组
 # ==========================================================================
-echo "🔍 正在检查 Azure 策略受限区域..."
+echo "=========================================================================="
+echo " 请选择操作模式："
+echo " [1] 批量创建 VM (多选区域并发建机) [默认]"
+echo " [2] 批量删除资源组 (支持多选 / 全部删除)"
+echo "=========================================================================="
+read -r -p "请输入模式 [1/2, 默认: 1]: " main_mode
+main_mode=$(echo "$main_mode" | tr -d '\r')
+
+# ==========================================================================
+# 模式 2：删除资源组
+# ==========================================================================
+if [ "$main_mode" == "2" ]; then
+    echo -e "\n🔍 正在获取当前订阅下的所有资源组..."
+    ALL_RGS=()
+    raw_rgs=$(az group list --query "[].name" -o tsv 2>/dev/null | tr -d '\r')
+
+    for rg in $raw_rgs; do
+        [ -n "$rg" ] && ALL_RGS+=("$rg")
+    done
+
+    rg_total=${#ALL_RGS[@]}
+    if [ "$rg_total" -eq 0 ]; then
+        echo "⚠️ 当前订阅下未找到任何资源组！"
+        exit 0
+    fi
+
+    echo "=========================================================================="
+    echo " 找到以下资源组（支持多选，用空格或逗号分隔，如: 1 3 或 1,2,4；输入 all 为全选）："
+    for ((i=0; i<rg_total; i++)); do
+        opt_num=$((i + 1))
+        echo " [$opt_num] ${ALL_RGS[$i]}"
+    done
+    echo "=========================================================================="
+    read -r -p "请输入要删除的资源组序号: " del_input
+    clean_del_input=$(echo "$del_input" | tr -d '\r' | tr ',' ' ')
+
+    TARGET_RGS=()
+    if [ "$clean_del_input" == "all" ] || [ "$clean_del_input" == "ALL" ]; then
+        TARGET_RGS=("${ALL_RGS[@]}")
+    else
+        for item in $clean_del_input; do
+            if [[ "$item" =~ ^[0-9]+$ ]]; then
+                idx=$((item - 1))
+                if [ "$idx" -ge 0 ] && [ "$idx" -lt "$rg_total" ]; then
+                    TARGET_RGS+=("${ALL_RGS[$idx]}")
+                else
+                    echo "⚠️ 序号 $item 超出范围 (有效范围: 1 - $rg_total)"
+                fi
+            else
+                echo "⚠️ 忽略无效输入: $item"
+            fi
+        done
+    fi
+
+    # 去重
+    TARGET_RGS=($(echo "${TARGET_RGS[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
+
+    if [ ${#TARGET_RGS[@]} -eq 0 ]; then
+        echo "❌ 未选择任何有效的资源组，操作已取消。"
+        exit 0
+    fi
+
+    echo -e "\n⚠️  【危险操作】即将删除以下 ${#TARGET_RGS[@]} 个资源组及其下所有资源："
+    for r in "${TARGET_RGS[@]}"; do
+        echo "  - $r"
+    done
+    read -r -p "确认彻底删除吗？(y/N): " confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+        echo "已取消删除操作。"
+        exit 0
+    fi
+
+    echo -e "\n🗑️  正在并发提交删除请求到 Azure 后台..."
+    for r in "${TARGET_RGS[@]}"; do
+        az group delete --name "$r" --yes --no-wait -o none 2>&1
+        echo "  ✔️ 已向 Azure 提交删除指令: $r (后台异步清理中)"
+    done
+
+    echo "=========================================================================="
+    echo "🎉 所有选中资源组的删除任务已全部下发！"
+    echo "=========================================================================="
+    exit 0
+fi
+
+# ==========================================================================
+# 模式 1：批量创建 VM
+# ==========================================================================
+
+# 0. 动态读取策略受限区域列表
+echo -e "\n🔍 正在检查 Azure 策略受限区域..."
 ALLOWED_REGIONS=()
 raw_output=$(az policy assignment list \
   --query "[?name=='sys.regionrestriction'].parameters.listOfAllowedLocations.value" \
@@ -13,15 +102,12 @@ for r in $raw_output; do
     [ -n "$r" ] && ALLOWED_REGIONS+=("$r")
 done
 
-# ==========================================================================
 # 区域选择菜单（支持多选）
-# ==========================================================================
 echo "=========================================================================="
 echo " 请选择要部署的目标区域（支持多选，用空格或逗号分隔，如: 3 4 或 1,3）："
 echo " [1] 美西组 (westus, westus2, westus3) [默认]"
 echo " [2] 日本组 (japaneast, japanwest)"
 
-# 动态打印策略受限区域选项（从序号 3 开始）
 reg_count=${#ALLOWED_REGIONS[@]}
 if [ "$reg_count" -gt 0 ]; then
     for ((i=0; i<reg_count; i++)); do
@@ -32,17 +118,17 @@ fi
 echo "=========================================================================="
 read -r -p "请输入选项 [默认: 1]: " user_input
 
-# 1. 默认值处理（回车默认 1）
+# 1. 默认值处理
 if [ -z "$user_input" ]; then
     user_input="1"
 fi
 
-# 2. 清洗输入（去 \r，逗号替换为空格）
+# 2. 清洗输入
 clean_input=$(echo "$user_input" | tr -d '\r' | tr ',' ' ')
 
 SELECTED_REGIONS=()
 
-# 3. 逐个解析选项（纯数组下标匹配，彻底抛弃关联数组）
+# 3. 逐个解析选项
 for item in $clean_input; do
     if [ "$item" == "1" ]; then
         SELECTED_REGIONS+=("westus" "westus2" "westus3")
@@ -70,9 +156,7 @@ fi
 # 5. 数组去重
 REGIONS=($(echo "${SELECTED_REGIONS[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
 
-# ==========================================================================
-# 1. 定义部署机型与镜像配置
-# ==========================================================================
+# 定义部署机型与镜像配置
 SKUS=("Standard_B1s" "Standard_B2ats_v2" "Standard_B2pts_v2")
 
 ADMIN_USER="aaa"
@@ -82,13 +166,10 @@ ADMIN_PASS='EApBqz9kJfYUmwLujMku'
 IMAGE_X86="Canonical:ubuntu-26_04-lts:server:latest"
 IMAGE_ARM64="Canonical:ubuntu-26_04-lts:server-arm64:latest"
 
-# 临时结果记录目录 (用于跨子进程汇总)
+# 临时结果记录目录
 RESULT_DIR=$(mktemp -d)
 trap 'rm -rf "$RESULT_DIR"' EXIT
 
-# ==========================================================================
-# 2. 单个 VM 的完整创建函数
-# ==========================================================================
 deploy_vm() {
     local loc=$1
     local sku=$2
@@ -96,14 +177,13 @@ deploy_vm() {
     # 生成 5 位随机小写字母和数字组合
     rand_suffix=$(cat /dev/urandom | tr -dc 'a-z0-9' | fold -w 5 | head -n 1)
 
-    # 命名转换（带随机字符）
     sku_clean=$(echo "$sku" | tr '[:upper:]' '[:lower:]' | tr '_' '-')
     res_name="${loc}-${sku_clean}-${rand_suffix}"
     rg_name="rg-${res_name}"
     vm_name="vm-${res_name}"
     nsg_name="${vm_name}NSG"
 
-    # 根据机型选择架构镜像
+    # 选择架构镜像
     if [[ "$sku" == *"pts"* ]]; then
         current_image="$IMAGE_ARM64"
     else
@@ -112,7 +192,7 @@ deploy_vm() {
 
     echo "▶️  [开始] 区域: $loc | 机型: $sku (资源组: $rg_name)"
 
-    # 1. 创建带随机后缀的独立资源组
+    # 1. 创建独立资源组
     az group create \
       --name "$rg_name" \
       --location "$loc" \
@@ -130,9 +210,8 @@ deploy_vm() {
       --os-disk-size-gb 64 \
       -o none 2>&1
 
-    # 3. 状态校验与后续操作
+    # 3. 结果校验
     if [ $? -eq 0 ]; then
-        # 创建全开放 NSG 规则
         az network nsg rule create \
           --resource-group "$rg_name" \
           --nsg-name "$nsg_name" \
@@ -154,7 +233,6 @@ deploy_vm() {
         echo "❌ [失败] $vm_name 创建失败！正在后台清理/删除空资源组: $rg_name ..."
         echo "$vm_name (区域: $loc, 机型: $sku)" >> "$RESULT_DIR/failed.log"
         
-        # 失败时立即后台异步清理空资源组
         az group delete \
           --name "$rg_name" \
           --yes \
@@ -163,7 +241,6 @@ deploy_vm() {
     fi
 }
 
-# 导出函数及变量供子进程调用
 export -f deploy_vm
 export ADMIN_USER ADMIN_PASS IMAGE_X86 IMAGE_ARM64 RESULT_DIR
 
@@ -173,14 +250,14 @@ echo "🚀 已选定目标区域: ${REGIONS[*]}"
 echo "🚀 正在并发启动共 $total_tasks 个 VM 的部署流程..."
 echo "=========================================================================="
 
-# 3. 双重循环并发启动所有任务
+# 双重循环并发启动建机任务
 for loc in "${REGIONS[@]}"; do
     for sku in "${SKUS[@]}"; do
         deploy_vm "$loc" "$sku" &
     done
 done
 
-# 4. 等待所有后台任务执行完毕
+# 等待所有建机任务执行完毕
 echo "⏳ 所有任务已投递，正在后台并发建机中，请稍候..."
 wait
 
@@ -188,9 +265,7 @@ echo "==========================================================================
 echo "🎉 所有并发部署任务已全部执行完毕！"
 echo "=========================================================================="
 
-# ==========================================================================
-# 5. 汇总与统计结果
-# ==========================================================================
+# 汇总与统计结果
 touch "$RESULT_DIR/success.log" "$RESULT_DIR/failed.log"
 success_count=$(wc -l < "$RESULT_DIR/success.log" | tr -d ' ')
 failed_count=$(wc -l < "$RESULT_DIR/failed.log" | tr -d ' ')
