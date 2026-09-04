@@ -1,31 +1,51 @@
 #!/bin/bash
 
 # ==========================================================================
+# 0. 检查依赖与动态读取策略受限区域
+# ==========================================================================
+echo "🔍 正在检查 Azure 策略受限区域..."
+ALLOWED_REGIONS=($(az policy assignment list \
+  --query "[?name=='sys.regionrestriction'].parameters.listOfAllowedLocations.value[]" \
+  -o tsv 2>/dev/null))
+
+# ==========================================================================
 # 区域选择菜单
 # ==========================================================================
 echo "=========================================================================="
 echo " 请选择要部署的目标区域组："
 echo " [1] 美西组 (westus, westus2, westus3) [默认]"
 echo " [2] 日本组 (japaneast, japanwest)"
-echo "=========================================================================="
-read -p "请输入选项 [1/2, 默认: 1]: " choice
 
-# 处理默认选项与输入匹配
-case "$choice" in
-    2)
-        REGIONS=("japaneast" "japanwest")
-        group_name="日本组 (japaneast, japanwest)"
-        ;;
-    1|"")
-        REGIONS=("westus" "westus2" "westus3")
-        group_name="美西组 (westus, westus2, westus3)"
-        ;;
-    *)
-        echo "⚠️ 输入无效，默认使用美西组！"
-        REGIONS=("westus" "westus2" "westus3")
-        group_name="美西组 (westus, westus2, westus3)"
-        ;;
-esac
+# 动态生成策略受限区域选项（从序号 3 开始）
+option_idx=3
+declare -A DYNAMIC_OPTIONS
+
+if [ ${#ALLOWED_REGIONS[@]} -gt 0 ]; then
+    for reg in "${ALLOWED_REGIONS[@]}"; do
+        echo " [$option_idx] 受限区域: $reg"
+        DYNAMIC_OPTIONS["$option_idx"]="$reg"
+        ((option_idx++))
+    done
+fi
+echo "=========================================================================="
+read -p "请输入选项 [默认: 1]: " choice
+
+# 处理选项匹配
+if [ -z "$choice" ] || [ "$choice" == "1" ]; then
+    REGIONS=("westus" "westus2" "westus3")
+    group_name="美西组 (westus, westus2, westus3)"
+elif [ "$choice" == "2" ]; then
+    REGIONS=("japaneast" "japanwest")
+    group_name="日本组 (japaneast, japanwest)"
+elif [ -n "${DYNAMIC_OPTIONS[$choice]}" ]; then
+    target_region="${DYNAMIC_OPTIONS[$choice]}"
+    REGIONS=("$target_region")
+    group_name="策略受限区域 ($target_region)"
+else
+    echo "⚠️ 输入无效，默认使用美西组！"
+    REGIONS=("westus" "westus2" "westus3")
+    group_name="美西组 (westus, westus2, westus3)"
+fi
 
 # 1. 定义部署机型与镜像配置
 SKUS=("Standard_B1s" "Standard_B2ats_v2" "Standard_B2pts_v2")
