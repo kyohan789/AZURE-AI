@@ -13,12 +13,11 @@ read -r -p "请输入模式 [1/2/3, 默认: 1]: " main_mode
 main_mode=$(echo "$main_mode" | tr -d '\r')
 
 # ==========================================================================
-# 模式 3：查询所有虚拟机信息并以表格显示（去除了 PrivateIP）
+# 模式 3：查询所有虚拟机信息并以表格显示（无 PrivateIP）
 # ==========================================================================
 if [ "$main_mode" == "3" ]; then
     echo -e "\n🔍 正在查询当前订阅下所有虚拟机的详细信息..."
     
-    # 获取 VM 列表并显示详细信息表格（仅保留公网 IP）
     az vm list -d --query "[].{
         Name: name,
         Location: location,
@@ -124,16 +123,18 @@ for r in $raw_output; do
     [ -n "$r" ] && ALLOWED_REGIONS+=("$r")
 done
 
+reg_count=${#ALLOWED_REGIONS[@]}
+
 # 区域选择菜单（支持多选）
 echo "=========================================================================="
-echo " 请选择要部署的目标区域（支持多选，用空格或逗号分隔，如: 3 4 或 1,3）："
+echo " 请选择要部署的目标区域（支持多选，用空格或逗号分隔，如: 3 或 1 4 5）："
 echo " [1] 美西组 (westus, westus2, westus3) [默认]"
 echo " [2] 日本组 (japaneast, japanwest)"
-
-reg_count=${#ALLOWED_REGIONS[@]}
 if [ "$reg_count" -gt 0 ]; then
+    echo " [3] 所有受限区域 (一键部署所有受限区域: ${ALLOWED_REGIONS[*]})"
+    # 单个区域从 4 开始往后顺延
     for ((i=0; i<reg_count; i++)); do
-        opt_num=$((i + 3))
+        opt_num=$((i + 4))
         echo " [$opt_num] 受限区域: ${ALLOWED_REGIONS[$i]}"
     done
 fi
@@ -156,12 +157,16 @@ for item in $clean_input; do
         SELECTED_REGIONS+=("westus" "westus2" "westus3")
     elif [ "$item" == "2" ]; then
         SELECTED_REGIONS+=("japaneast" "japanwest")
-    elif [[ "$item" =~ ^[0-9]+$ ]]; then
-        target_idx=$((item - 3))
+    elif [ "$item" == "3" ] && [ "$reg_count" -gt 0 ]; then
+        # 选项 3 代表包含所有受限区域
+        SELECTED_REGIONS+=("${ALLOWED_REGIONS[@]}")
+    elif [[ "$item" =~ ^[0-9]+$ ]] && [ "$reg_count" -gt 0 ]; then
+        # 单个受限区域下标对应: item - 4
+        target_idx=$((item - 4))
         if [ "$target_idx" -ge 0 ] && [ "$target_idx" -lt "$reg_count" ]; then
             SELECTED_REGIONS+=("${ALLOWED_REGIONS[$target_idx]}")
         else
-            max_opt=$((reg_count + 2))
+            max_opt=$((reg_count + 3))
             echo "⚠️ 选项 $item 超出范围 (有效选项: 1 - $max_opt)"
         fi
     else
