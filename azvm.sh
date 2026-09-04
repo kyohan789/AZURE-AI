@@ -124,21 +124,26 @@ done
 
 reg_count=${#ALLOWED_REGIONS[@]}
 
-# 区域选择菜单（支持多选）
+# 区域选择菜单（所有受限区域设为默认选项 1）
 echo "=========================================================================="
-echo " 请选择要部署的目标区域（支持多选，用空格或逗号分隔，如: 3 或 1 4 5）："
-echo " [1] 美西组 (westus, westus2, westus3) [默认]"
-echo " [2] 日本组 (japaneast, japanwest)"
+echo " 请选择要部署的目标区域（支持多选，用空格或逗号分隔，如: 1 2 或 2,4）："
+
 if [ "$reg_count" -gt 0 ]; then
-    echo " [3] 所有受限区域 (一键部署所有受限区域: ${ALLOWED_REGIONS[*]})"
+    echo " [1] 所有受限区域 (一键部署所有受限区域: ${ALLOWED_REGIONS[*]}) [默认]"
+    echo " [2] 美西组 (westus, westus2, westus3)"
+    echo " [3] 日本组 (japaneast, japanwest)"
     for ((i=0; i<reg_count; i++)); do
         opt_num=$((i + 4))
         echo " [$opt_num] 受限区域: ${ALLOWED_REGIONS[$i]}"
     done
+else
+    echo " [1] 美西组 (westus, westus2, westus3) [默认]"
+    echo " [2] 日本组 (japaneast, japanwest)"
 fi
 echo "=========================================================================="
 read -r -p "请输入选项 [默认: 1]: " user_input
 
+# 回车默认选 1
 if [ -z "$user_input" ]; then
     user_input="1"
 fi
@@ -147,28 +152,45 @@ clean_input=$(echo "$user_input" | tr -d '\r' | tr ',' ' ')
 SELECTED_REGIONS=()
 
 for item in $clean_input; do
-    if [ "$item" == "1" ]; then
-        SELECTED_REGIONS+=("westus" "westus2" "westus3")
-    elif [ "$item" == "2" ]; then
-        SELECTED_REGIONS+=("japaneast" "japanwest")
-    elif [ "$item" == "3" ] && [ "$reg_count" -gt 0 ]; then
-        SELECTED_REGIONS+=("${ALLOWED_REGIONS[@]}")
-    elif [[ "$item" =~ ^[0-9]+$ ]] && [ "$reg_count" -gt 0 ]; then
-        target_idx=$((item - 4))
-        if [ "$target_idx" -ge 0 ] && [ "$target_idx" -lt "$reg_count" ]; then
-            SELECTED_REGIONS+=("${ALLOWED_REGIONS[$target_idx]}")
+    if [ "$reg_count" -gt 0 ]; then
+        if [ "$item" == "1" ]; then
+            SELECTED_REGIONS+=("${ALLOWED_REGIONS[@]}")
+        elif [ "$item" == "2" ]; then
+            SELECTED_REGIONS+=("westus" "westus2" "westus3")
+        elif [ "$item" == "3" ]; then
+            SELECTED_REGIONS+=("japaneast" "japanwest")
+        elif [[ "$item" =~ ^[0-9]+$ ]]; then
+            target_idx=$((item - 4))
+            if [ "$target_idx" -ge 0 ] && [ "$target_idx" -lt "$reg_count" ]; then
+                SELECTED_REGIONS+=("${ALLOWED_REGIONS[$target_idx]}")
+            else
+                max_opt=$((reg_count + 3))
+                echo "⚠️ 选项 $item 超出范围 (有效选项: 1 - $max_opt)"
+            fi
         else
-            max_opt=$((reg_count + 3))
-            echo "⚠️ 选项 $item 超出范围 (有效选项: 1 - $max_opt)"
+            echo "⚠️ 忽略无效输入: $item"
         fi
     else
-        echo "⚠️ 忽略无效输入: $item"
+        # 未读取到受限区域时的降级映射
+        if [ "$item" == "1" ]; then
+            SELECTED_REGIONS+=("westus" "westus2" "westus3")
+        elif [ "$item" == "2" ]; then
+            SELECTED_REGIONS+=("japaneast" "japanwest")
+        else
+            echo "⚠️ 忽略无效输入: $item"
+        fi
     fi
 done
 
+# 兜底保护
 if [ ${#SELECTED_REGIONS[@]} -eq 0 ]; then
-    echo "⚠️ 未匹配到有效选项，默认使用美西组！"
-    SELECTED_REGIONS=("westus" "westus2" "westus3")
+    if [ "$reg_count" -gt 0 ]; then
+        echo "⚠️ 未匹配到有效选项，默认使用所有受限区域！"
+        SELECTED_REGIONS=("${ALLOWED_REGIONS[@]}")
+    else
+        echo "⚠️ 未匹配到有效选项，默认使用美西组！"
+        SELECTED_REGIONS=("westus" "westus2" "westus3")
+    fi
 fi
 
 REGIONS=($(echo "${SELECTED_REGIONS[@]}" | tr ' ' '\n' | sort -u | tr '\n' ' '))
@@ -249,7 +271,7 @@ deploy_vm() {
     vm_name="vm-${res_name}"
     nsg_name="${vm_name}NSG"
 
-    # 选择架构镜像 (pts 系列为 ARM64，其余 B 系列及 Fas_v7 均走 x86_64)
+    # 选择架构镜像 (pts 系列为 ARM64，其余均走 x86_64)
     if [[ "$sku" == *"pts"* ]]; then
         current_image="$IMAGE_ARM64"
     else
