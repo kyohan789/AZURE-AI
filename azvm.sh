@@ -13,19 +13,18 @@ read -r -p "请输入模式 [1/2/3, 默认: 1]: " main_mode
 main_mode=$(echo "$main_mode" | tr -d '\r')
 
 # ==========================================================================
-# 模式 3：查询所有虚拟机信息并以表格显示
+# 模式 3：查询所有虚拟机信息并以表格显示（去除了 PrivateIP）
 # ==========================================================================
 if [ "$main_mode" == "3" ]; then
-    echo -e "\n🔍 正在查询当前订阅下所有虚拟机的详细信息（包含公网 IP、机型与状态）..."
+    echo -e "\n🔍 正在查询当前订阅下所有虚拟机的详细信息..."
     
-    # 获取 VM 列表并显示详细信息表格
+    # 获取 VM 列表并显示详细信息表格（仅保留公网 IP）
     az vm list -d --query "[].{
         Name: name,
-        ResourceGroup: resourceGroup,
         Location: location,
         Size: hardwareProfile.vmSize,
         PublicIP: publicIps,
-        PrivateIP: privateIps,
+        ResourceGroup: resourceGroup,
         PowerState: powerState
     }" -o table
 
