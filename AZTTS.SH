@@ -38,85 +38,115 @@ if [ "$TOTAL" -eq 0 ]; then
     exit 0
 fi
 
-# 初始化统计变量与记录数组
-SUCCESS_COUNT=0
-FAILED_COUNT=0
-declare -a SUCCESS_LIST=()
-declare -a FAILED_LIST=()
-declare -a CLEANUP_RGS=()
+# 创建临时工作目录存储各并发任务的输出与结果
+WORKDIR=$(mktemp -d /tmp/azure_tts_deploy.XXXXXX)
+trap 'rm -rf "$WORKDIR"' EXIT
 
-# 4. 遍历区域：先创建该区域资源组，再创建语音服务
-CURRENT=0
-for REGION in "${TARGET_REGIONS[@]}"; do
-    ((CURRENT++))
+# 单区域部署任务函数（在子进程中并行执行）
+deploy_region() {
+    local REGION="$1"
+    local INDEX="$2"
+    local TOTAL="$3"
+    local WORKDIR="$4"
+
+    local DATE
     DATE=$(date +%Y%m%d)
+    local RANDOM_STR
     RANDOM_STR=$(tr -dc 'a-z0-9' < /dev/urandom | head -c 6)
-    NAME="${DATE}-${RANDOM_STR}"
-    RG_NAME="waz-${REGION}"
+    local NAME="${DATE}-${RANDOM_STR}"
+    local RG_NAME="waz-${REGION}"
+    local LOG_FILE="${WORKDIR}/${REGION}.log"
 
-    echo ""
-    echo "[${CURRENT}/${TOTAL}] 准备区域: ${REGION}"
-    echo ">>> [1/2] 正在创建/确认资源组: ${RG_NAME} ..."
-    
-    az group create \
-        --name "$RG_NAME" \
-        --location "$REGION" \
-        --output json
+    {
+        echo "=================================================="
+        echo "[${INDEX}/${TOTAL}] 开始部署区域: ${REGION}"
+        echo ">>> [1/2] 正在创建/确认资源组: ${RG_NAME} ..."
+        az group create --name "$RG_NAME" --location "$REGION" --output json
+        local RG_STATUS=$?
 
-    RG_STATUS=$?
-    if [ $RG_STATUS -ne 0 ]; then
-        echo "资源组创建失败，记录清理并跳过该区域部署。"
-        ((FAILED_COUNT++))
-        FAILED_LIST+=("${REGION} (资源组创建失败)")
-        CLEANUP_RGS+=("$RG_NAME")
-        continue
-    fi
+        if [ $RG_STATUS -ne 0 ]; then
+            echo "[-] 资源组 ${RG_NAME} 创建失败。"
+            echo "FAILED|${REGION}|${RG_NAME}|RG_CREATE_FAIL" > "${WORKDIR}/${REGION}.status"
+            echo "=================================================="
+            return
+        fi
 
-    echo ">>> [2/2] 正在创建语音服务: ${NAME} (资源组: ${RG_NAME}, 层级: F0) ..."
-    echo "--- 原始返回数据 ---"
-
-    az cognitiveservices account create \
-        --name "$NAME" \
-        --resource-group "$RG_NAME" \
-        --kind SpeechServices \
-        --sku F0 \
-        --location "$REGION" \
-        --yes \
-        --output json
-
-    STATUS=$?
-    echo "--- 返回结束 ---"
-
-    if [ $STATUS -eq 0 ]; then
-        echo "状态: [成功]"
-        ((SUCCESS_COUNT++))
-        
-        ENDPOINT=$(az cognitiveservices account show \
+        echo ">>> [2/2] 正在创建语音服务: ${NAME} (层级: F0) ..."
+        az cognitiveservices account create \
             --name "$NAME" \
             --resource-group "$RG_NAME" \
-            --query "properties.endpoint" \
-            --output tsv 2>/dev/null)
+            --kind SpeechServices \
+            --sku F0 \
+            --location "$REGION" \
+            --yes \
+            --output json
+        local COG_STATUS=$?
 
-        KEY=$(az cognitiveservices account keys list \
-            --name "$NAME" \
-            --resource-group "$RG_NAME" \
-            --query "key1" \
-            --output tsv 2>/dev/null)
+        if [ $COG_STATUS -eq 0 ]; then
+            local ENDPOINT
+            ENDPOINT=$(az cognitiveservices account show \
+                --name "$NAME" \
+                --resource-group "$RG_NAME" \
+                --query "properties.endpoint" \
+                --output tsv 2>/dev/null)
 
-        SUCCESS_LIST+=("${REGION} | ${RG_NAME} | ${NAME} | ${ENDPOINT} | ${KEY}")
+            local KEY
+            KEY=$(az cognitiveservices account keys list \
+                --name "$NAME" \
+                --resource-group "$RG_NAME" \
+                --query "key1" \
+                --output tsv 2>/dev/null)
+
+            echo "[+] 区域 [${REGION}] 创建成功！"
+            echo "SUCCESS|${REGION}|${RG_NAME}|${NAME}|${ENDPOINT}|${KEY}" > "${WORKDIR}/${REGION}.status"
+        else
+            echo "[-] 区域 [${REGION}] 语音服务创建失败，标记删除资源组: ${RG_NAME} ..."
+            echo "FAILED|${REGION}|${RG_NAME}|SPEECH_CREATE_FAIL" > "${WORKDIR}/${REGION}.status"
+        fi
+        echo "=================================================="
+    } > "$LOG_FILE" 2>&1
+
+    # 实时打印该并发区域的完整原始返回日志
+    cat "$LOG_FILE"
+}
+
+# 4. 并发拉起所有区域的部署任务
+echo "正在异步并行部署所有目标区域..."
+INDEX=0
+for REGION in "${TARGET_REGIONS[@]}"; do
+    ((INDEX++))
+    deploy_region "$REGION" "$INDEX" "$TOTAL" "$WORKDIR" &
+done
+
+# 等待所有后台任务完成
+wait
+echo "所有异步任务执行完成，正在汇总结果..."
+
+# 5. 解析结果与清理失败资源组
+SUCCESS_LIST=()
+FAILED_LIST=()
+CLEANUP_RGS=()
+
+for REGION in "${TARGET_REGIONS[@]}"; do
+    STATUS_FILE="${WORKDIR}/${REGION}.status"
+    if [ -f "$STATUS_FILE" ]; then
+        IFS='|' read -r TYPE R_REGION R_RG R_NAME R_ENDPOINT R_KEY < "$STATUS_FILE"
+        if [ "$TYPE" == "SUCCESS" ]; then
+            SUCCESS_LIST+=("${R_REGION} | ${R_RG} | ${R_NAME} | ${R_ENDPOINT} | ${R_KEY}")
+        else
+            FAILED_LIST+=("${R_REGION} (${R_NAME})")
+            CLEANUP_RGS+=("$R_RG")
+        fi
     else
-        echo "状态: [失败]"
-        ((FAILED_COUNT++))
-        FAILED_LIST+=("${REGION} (语音服务创建失败)")
-        CLEANUP_RGS+=("$RG_NAME")
+        FAILED_LIST+=("${REGION} (未知退出)")
+        CLEANUP_RGS+=("waz-${REGION}")
     fi
 done
 
-# 5. 清理创建失败的资源组
+# 异步清理失败的资源组
 if [ ${#CLEANUP_RGS[@]} -gt 0 ]; then
     echo ""
     echo "==================== 清理失败资源组 ===================="
-    # 去重处理
     mapfile -t UNIQUE_CLEANUP_RGS < <(printf "%s\n" "${CLEANUP_RGS[@]}" | sort -u)
     for rg in "${UNIQUE_CLEANUP_RGS[@]}"; do
         echo "正在后台删除失败资源组: ${rg} ..."
@@ -128,7 +158,7 @@ fi
 # 6. 执行结果汇总
 echo ""
 echo "==================== 执行汇总 ===================="
-echo "总数: ${TOTAL} | 成功: ${SUCCESS_COUNT} | 失败: ${FAILED_COUNT}"
+echo "总数: ${TOTAL} | 成功: ${#SUCCESS_LIST[@]} | 失败: ${#FAILED_LIST[@]}"
 echo "--------------------------------------------------"
 
 if [ ${#SUCCESS_LIST[@]} -gt 0 ]; then
@@ -140,7 +170,7 @@ fi
 
 if [ ${#FAILED_LIST[@]} -gt 0 ]; then
     echo ""
-    echo "失败列表 (${FAILED_COUNT}):"
+    echo "失败列表 (${#FAILED_LIST[@]}):"
     for item in "${FAILED_LIST[@]}"; do
         echo "  [✗] $item"
     done
