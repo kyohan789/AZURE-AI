@@ -5,9 +5,8 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
-NC='\033[0m' # 重置颜色
+NC='\033[0m'
 
-# 最大并发数限制
 MAX_JOBS=10
 
 # 1. 查询策略中允许的区域限制
@@ -15,11 +14,11 @@ echo -e "${CYAN}=== 正在检查策略区域限制 (Policy Restriction) ===${NC}
 POLICY_RAW=$(az policy assignment list --query "[?name=='sys.regionrestriction'].parameters.listOfAllowedLocations.value" --output json 2>/dev/null)
 ALLOWED_POLICY_REGIONS=$(echo "$POLICY_RAW" | grep -oE '"[a-zA-Z0-9]+"' | tr -d '"' | tr '[:upper:]' '[:lower:]' | sort -u)
 
-# 2. 获取 Azure 所有支持的标准物理区域列表
+# 2. 获取物理区域列表
 echo -e "${CYAN}=== 正在查询标准物理区域 ===${NC}"
 ALL_REGIONS=$(az account list-locations --query "[?metadata.regionType=='Physical'].name" --output tsv | tr '[:upper:]' '[:lower:]' | sort -u)
 
-# 3. 判断目标区域
+# 3. 确定目标区域
 TARGET_REGIONS=()
 if [ -n "$ALLOWED_POLICY_REGIONS" ]; then
     echo -e "${YELLOW}检测到策略限制，允许的区域为:${NC}"
@@ -37,14 +36,15 @@ echo "待部署区域列表: ${TARGET_REGIONS[*]}"
 echo "=================================================="
 
 if [ "$TOTAL" -eq 0 ]; then
-    echo -e "${RED}未获取到待部署区域，请检查策略名称或账号权限。${NC}"
+    echo -e "${RED}未获取到待部署区域，退出。${NC}"
     exit 0
 fi
 
-WORKDIR=$(mktemp -d /tmp/azure_tts_async.XXXXXX)
-trap 'rm -rf "$WORKDIR"' EXIT
+# 创建独立运行目录（不挂载 EXIT trap，防止子进程退出时误删）
+WORKDIR="/tmp/az_tts_$(date +%s)_$RANDOM"
+mkdir -p "$WORKDIR"
 
-# 单区域异步执行函数
+# 单区域执行函数
 deploy_worker() {
     local REGION="$1"
     local IDX="$2"
@@ -58,12 +58,12 @@ deploy_worker() {
     local NAME="${DATE}-${RANDOM_STR}"
     local RG_NAME="waz-${REGION}"
 
-    # 毫秒级错峰扰动
+    # 错峰 0.1~0.9 秒，防止并发抢锁
     sleep "0.$((RANDOM % 9 + 1))"
 
     echo "${PREFIX} >>> 开始创建资源组: ${RG_NAME}"
-    # 改用 # 作为分隔符，避免 PREFIX 中的 / 冲突
-    az group create --name "$RG_NAME" --location "$REGION" --output json 2>&1 | sed "s#^#${PREFIX}-RG #"
+    # 使用 awk 添加前缀，不受任何斜杠或特殊符号影响
+    az group create --name "$RG_NAME" --location "$REGION" --output json 2>&1 | awk -v p="${PREFIX}-RG " '{print p $0}'
     local RG_STATUS=${PIPESTATUS[0]}
 
     if [ $RG_STATUS -ne 0 ]; then
@@ -73,7 +73,6 @@ deploy_worker() {
     fi
 
     echo "${PREFIX} >>> 开始创建语音服务: ${NAME} (F0)"
-    # 改用 # 作为分隔符
     az cognitiveservices account create \
         --name "$NAME" \
         --resource-group "$RG_NAME" \
@@ -81,7 +80,7 @@ deploy_worker() {
         --sku F0 \
         --location "$REGION" \
         --yes \
-        --output json 2>&1 | sed "s#^#${PREFIX}-COG #"
+        --output json 2>&1 | awk -v p="${PREFIX}-COG " '{print p $0}'
     local COG_STATUS=${PIPESTATUS[0]}
 
     if [ $COG_STATUS -eq 0 ]; then
@@ -109,18 +108,16 @@ deploy_worker() {
 
 echo -e "${CYAN}=== 开始并发部署 (并发窗口: ${MAX_JOBS}) ===${NC}"
 
-# 使用 FIFO 管道控制并发上限
+# 并发槽控制
 FIFO_PATH="${WORKDIR}/job_queue"
 mkfifo "$FIFO_PATH"
 exec 6<>"$FIFO_PATH"
 rm -f "$FIFO_PATH"
 
-# 注入并发槽令牌
 for ((i=0; i<MAX_JOBS; i++)); do
     echo >&6
 done
 
-# 分发并发任务
 INDEX=0
 for REGION in "${TARGET_REGIONS[@]}"; do
     ((INDEX++))
@@ -131,14 +128,12 @@ for REGION in "${TARGET_REGIONS[@]}"; do
     } &
 done
 
-# 等待全部完成
 wait
 exec 6>&-
 
 echo "=================================================="
 echo "所有任务执行完成，正在汇总结果..."
 
-# 汇总与失败清理
 SUCCESS_LIST=()
 FAILED_LIST=()
 CLEANUP_RGS=()
@@ -154,7 +149,7 @@ for REGION in "${TARGET_REGIONS[@]}"; do
             CLEANUP_RGS+=("$R_RG")
         fi
     else
-        FAILED_LIST+=("${REGION} (未知异常退出)")
+        FAILED_LIST+=("${REGION} (异常未完成)")
         CLEANUP_RGS+=("waz-${REGION}")
     fi
 done
@@ -170,7 +165,7 @@ if [ ${#CLEANUP_RGS[@]} -gt 0 ]; then
     done
 fi
 
-# 最终汇总展示
+# 汇总输出
 echo ""
 echo "==================== 执行汇总 ===================="
 echo -e "总数: ${TOTAL} | ${GREEN}成功: ${#SUCCESS_LIST[@]}${NC} | ${RED}失败: ${#FAILED_LIST[@]}${NC}"
@@ -191,3 +186,6 @@ if [ ${#FAILED_LIST[@]} -gt 0 ]; then
     done
 fi
 echo "=================================================="
+
+# 任务结束后清理工作临时目录
+rm -rf "$WORKDIR"
