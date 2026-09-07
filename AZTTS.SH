@@ -40,11 +40,10 @@ if [ "$TOTAL" -eq 0 ]; then
     exit 0
 fi
 
-# 创建独立运行目录（不挂载 EXIT trap，防止子进程退出时误删）
 WORKDIR="/tmp/az_tts_$(date +%s)_$RANDOM"
 mkdir -p "$WORKDIR"
 
-# 单区域执行函数
+# 单区域执行函数 (不使用 sed/awk 管道，直接原子执行)
 deploy_worker() {
     local REGION="$1"
     local IDX="$2"
@@ -58,13 +57,12 @@ deploy_worker() {
     local NAME="${DATE}-${RANDOM_STR}"
     local RG_NAME="waz-${REGION}"
 
-    # 错峰 0.1~0.9 秒，防止并发抢锁
+    # 错峰 0.1~0.9 秒，防止并发争锁
     sleep "0.$((RANDOM % 9 + 1))"
 
     echo "${PREFIX} >>> 开始创建资源组: ${RG_NAME}"
-    # 使用 awk 添加前缀，不受任何斜杠或特殊符号影响
-    az group create --name "$RG_NAME" --location "$REGION" --output json 2>&1 | awk -v p="${PREFIX}-RG " '{print p $0}'
-    local RG_STATUS=${PIPESTATUS[0]}
+    az group create --name "$RG_NAME" --location "$REGION" --output json
+    local RG_STATUS=$?
 
     if [ $RG_STATUS -ne 0 ]; then
         echo -e "${RED}${PREFIX} [-] 资源组创建失败！${NC}"
@@ -80,8 +78,8 @@ deploy_worker() {
         --sku F0 \
         --location "$REGION" \
         --yes \
-        --output json 2>&1 | awk -v p="${PREFIX}-COG " '{print p $0}'
-    local COG_STATUS=${PIPESTATUS[0]}
+        --output json
+    local COG_STATUS=$?
 
     if [ $COG_STATUS -eq 0 ]; then
         local ENDPOINT
@@ -187,5 +185,5 @@ if [ ${#FAILED_LIST[@]} -gt 0 ]; then
 fi
 echo "=================================================="
 
-# 任务结束后清理工作临时目录
+# 最终清理临时目录
 rm -rf "$WORKDIR"
