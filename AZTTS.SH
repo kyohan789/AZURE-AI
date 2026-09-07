@@ -3,23 +3,23 @@
 # 1. 设置资源组名称
 RESOURCE_GROUP="waz-eastus2"
 
-# 2. 查询策略中允许的区域限制
+# 2. 查询策略中允许的区域限制（统一清洗为小写、无空格）
 echo "=== 正在检查策略区域限制 (Policy Restriction) ==="
 ALLOWED_POLICY_REGIONS=$(az policy assignment list \
     --query "[?name=='sys.regionrestriction'].parameters.listOfAllowedLocations.value[]" \
-    --output tsv | sort -u | grep -v '^$')
+    --output tsv | tr -d '[]", ' | tr '[:upper:]' '[:lower:]' | sort -u | grep -v '^$')
 
-# 3. 查询支持 SpeechServices 免费层 (F0) 的可用区域
+# 3. 查询支持 SpeechServices 免费层 (F0) 的可用区域（统一清洗为小写、无空格）
 echo "=== 正在查询支持 SpeechServices 免费层级 (F0) 的可用区域 ==="
 SPEECH_REGIONS=$(az cognitiveservices account list-skus \
     --kind SpeechServices \
     --query "[?name=='F0'].locations[]" \
-    --output tsv | sort -u | grep -v '^$')
+    --output tsv | tr -d ' ' | tr '[:upper:]' '[:lower:]' | sort -u | grep -v '^$')
 
-# 4. 根据策略判断目标执行区域（如果有策略限制，取交集；否则取全部）
+# 4. 根据策略判断目标执行区域（使用 grep 精准匹配交集）
 if [ -n "$ALLOWED_POLICY_REGIONS" ]; then
     echo "检测到策略区域限制，将仅在限制区域内匹配创建..."
-    mapfile -t TARGET_REGIONS < <(comm -12 <(echo "$ALLOWED_POLICY_REGIONS") <(echo "$SPEECH_REGIONS"))
+    mapfile -t TARGET_REGIONS < <(grep -Fxf <(echo "$ALLOWED_POLICY_REGIONS") <(echo "$SPEECH_REGIONS"))
 else
     echo "未检测到策略限制，将针对所有可用区域创建..."
     mapfile -t TARGET_REGIONS < <(echo "$SPEECH_REGIONS")
@@ -53,7 +53,6 @@ for REGION in "${TARGET_REGIONS[@]}"; do
     echo "[${CURRENT}/${TOTAL}] 正在创建: ${NAME} (区域: ${REGION}, 层级: F0) ..."
     echo "--- 原始返回数据 ---"
 
-    # 执行创建并保留原始输出
     az cognitiveservices account create \
         --name "$NAME" \
         --resource-group "$RESOURCE_GROUP" \
@@ -70,14 +69,12 @@ for REGION in "${TARGET_REGIONS[@]}"; do
         echo "状态: [成功]"
         ((SUCCESS_COUNT++))
         
-        # 获取 Endpoint (URL)
         ENDPOINT=$(az cognitiveservices account show \
             --name "$NAME" \
             --resource-group "$RESOURCE_GROUP" \
             --query "properties.endpoint" \
             --output tsv 2>/dev/null)
 
-        # 获取 Key1
         KEY=$(az cognitiveservices account keys list \
             --name "$NAME" \
             --resource-group "$RESOURCE_GROUP" \
