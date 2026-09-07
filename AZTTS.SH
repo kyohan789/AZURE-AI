@@ -3,37 +3,44 @@
 # 1. 设置资源组名称
 RESOURCE_GROUP="waz-eastus2"
 
-# 2. 查询策略中允许的区域限制（转小写，去除空格、中划线及特殊符号）
+# 2. 查询策略中允许的区域限制
 echo "=== 正在检查策略区域限制 (Policy Restriction) ==="
-ALLOWED_POLICY_REGIONS=$(az policy assignment list \
-    --query "[?name=='sys.regionrestriction'].parameters.listOfAllowedLocations.value[]" \
-    --output tsv | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]-_' | sort -u | grep -v '^$')
+POLICY_JSON=$(az policy assignment list --query "[?name=='sys.regionrestriction'].parameters.listOfAllowedLocations.value" --output json)
 
-echo "策略允许的区域（清洗后）: ${ALLOWED_POLICY_REGIONS}"
+# 从 JSON 数组中提取所有区域，转换为纯小写并去除空格和引号
+ALLOWED_POLICY_REGIONS=$(echo "$POLICY_JSON" | grep -o '"[^"]*"' | tr -d '" ' | tr '[:upper:]' '[:lower:]' | sort -u)
 
-# 3. 查询支持 SpeechServices 免费层 (F0) 的可用区域（同样转小写，去除空格、中划线）
-echo "=== 正在查询支持 SpeechServices 免费层级 (F0) 的可用区域 ==="
-SPEECH_REGIONS=$(az cognitiveservices account list-skus \
-    --kind SpeechServices \
-    --query "[?name=='F0'].locations[]" \
-    --output tsv | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]-_' | sort -u | grep -v '^$')
+# 3. 查询 CognitiveServices 全球所有支持的标准物理区域 ID
+echo "=== 正在查询支持的可用区域 ==="
+ALL_SPEECH_REGIONS=$(az provider show --namespace Microsoft.CognitiveServices \
+    --query "resourceTypes[?resourceType=='accounts'].locations[]" \
+    --output tsv | tr -d ' ' | tr '[:upper:]' '[:lower:]' | sort -u)
 
-# 4. 匹配交集
+# 4. 判断区域：如果有策略限制，过滤匹配；否则使用全部区域
+TARGET_REGIONS=()
 if [ -n "$ALLOWED_POLICY_REGIONS" ]; then
-    echo "检测到策略区域限制，将仅在限制区域内匹配创建..."
-    mapfile -t TARGET_REGIONS < <(grep -Fxf <(echo "$ALLOWED_POLICY_REGIONS") <(echo "$SPEECH_REGIONS"))
+    echo "检测到策略区域限制，提取到的策略区域:"
+    echo "$ALLOWED_POLICY_REGIONS"
+    
+    # 逐个匹配策略允许的区域
+    for r in $ALLOWED_POLICY_REGIONS; do
+        if echo "$ALL_SPEECH_REGIONS" | grep -qx "$r"; then
+            TARGET_REGIONS+=("$r")
+        fi
+    done
 else
-    echo "未检测到策略限制，将针对所有可用区域创建..."
-    mapfile -t TARGET_REGIONS < <(echo "$SPEECH_REGIONS")
+    echo "未检测到策略限制，将针对所有区域运行..."
+    mapfile -t TARGET_REGIONS < <(echo "$ALL_SPEECH_REGIONS")
 fi
 
 TOTAL=${#TARGET_REGIONS[@]}
+echo "=================================================="
 echo "最终待部署区域总数: ${TOTAL}"
 echo "待部署区域列表: ${TARGET_REGIONS[*]}"
 echo "=================================================="
 
 if [ "$TOTAL" -eq 0 ]; then
-    echo "没有需要创建的区域，脚本退出。"
+    echo "没有匹配到需要创建的区域，请检查订阅策略或权限。"
     exit 0
 fi
 
@@ -43,7 +50,7 @@ FAILED_COUNT=0
 declare -a SUCCESS_LIST=()
 declare -a FAILED_LIST=()
 
-# 5. 遍历并创建服务
+# 5. 遍历并创建服务 (层级: F0)
 CURRENT=0
 for REGION in "${TARGET_REGIONS[@]}"; do
     ((CURRENT++))
