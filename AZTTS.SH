@@ -7,6 +7,9 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m' # 重置颜色
 
+# 最大并发进程数限制
+MAX_JOBS=10
+
 # 1. 查询策略中允许的区域限制
 echo -e "${CYAN}=== 正在检查策略区域限制 (Policy Restriction) ===${NC}"
 POLICY_RAW=$(az policy assignment list --query "[?name=='sys.regionrestriction'].parameters.listOfAllowedLocations.value" --output json 2>/dev/null)
@@ -29,7 +32,7 @@ fi
 
 TOTAL=${#TARGET_REGIONS[@]}
 echo "=================================================="
-echo "最终待部署区域总数: ${TOTAL}"
+echo "最终待部署区域总数: ${TOTAL} (最大并发上限: ${MAX_JOBS})"
 echo "待部署区域列表: ${TARGET_REGIONS[*]}"
 echo "=================================================="
 
@@ -51,7 +54,6 @@ deploy_worker() {
     local NAME="${DATE}-${RANDOM_STR}"
     local RG_NAME="waz-${REGION}"
 
-    # 微小错峰扰动，避开并发锁
     sleep "0.$((RANDOM % 9 + 1))"
 
     echo "[${REGION}] >>> 开始创建资源组: ${RG_NAME}"
@@ -98,15 +100,36 @@ deploy_worker() {
     fi
 }
 
-echo -e "${CYAN}=== 已并发启动所有区域任务，实时日志输出如下 ===${NC}"
-for REGION in "${TARGET_REGIONS[@]}"; do
-    deploy_worker "$REGION" &
+echo -e "${CYAN}=== 开始并发部署 (并发窗口: ${MAX_JOBS}) ===${NC}"
+
+# 使用命名管道 FIFO 实现并发槽位控制
+FIFO_PATH="${WORKDIR}/job_queue"
+mkfifo "$FIFO_PATH"
+exec 6<>"$FIFO_PATH"
+rm -f "$FIFO_PATH"
+
+# 预先向管道压入 MAX_JOBS 个 token
+for ((i=0; i<MAX_JOBS; i++)); do
+    echo >&6
 done
 
-# 等待全部后台任务结束
+# 循环派发任务
+for REGION in "${TARGET_REGIONS[@]}"; do
+    # 获取一个并发槽（若无则阻塞等待）
+    read -r -u 6
+    {
+        deploy_worker "$REGION"
+        # 归还并发槽
+        echo >&6
+    } &
+done
+
+# 等待所有后台子进程完成
 wait
+exec 6>&- # 关闭并释放文件描述符
+
 echo "=================================================="
-echo "所有异步任务执行完成，正在汇总结果..."
+echo "所有任务执行完成，正在汇总结果..."
 
 # 汇总与失败清理
 SUCCESS_LIST=()
@@ -140,7 +163,7 @@ if [ ${#CLEANUP_RGS[@]} -gt 0 ]; then
     done
 fi
 
-# 最终汇总展示（带颜色输出）
+# 最终汇总展示
 echo ""
 echo "==================== 执行汇总 ===================="
 echo -e "总数: ${TOTAL} | ${GREEN}成功: ${#SUCCESS_LIST[@]}${NC} | ${RED}失败: ${#FAILED_LIST[@]}${NC}"
