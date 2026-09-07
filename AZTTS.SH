@@ -3,20 +3,22 @@
 # 1. 设置资源组名称
 RESOURCE_GROUP="waz-eastus2"
 
-# 2. 查询策略中允许的区域限制（统一清洗为小写、无空格）
+# 2. 查询策略中允许的区域限制（转小写，去除空格、中划线及特殊符号）
 echo "=== 正在检查策略区域限制 (Policy Restriction) ==="
 ALLOWED_POLICY_REGIONS=$(az policy assignment list \
     --query "[?name=='sys.regionrestriction'].parameters.listOfAllowedLocations.value[]" \
-    --output tsv | tr -d '[]", ' | tr '[:upper:]' '[:lower:]' | sort -u | grep -v '^$')
+    --output tsv | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]-_' | sort -u | grep -v '^$')
 
-# 3. 查询支持 SpeechServices 免费层 (F0) 的可用区域（统一清洗为小写、无空格）
+echo "策略允许的区域（清洗后）: ${ALLOWED_POLICY_REGIONS}"
+
+# 3. 查询支持 SpeechServices 免费层 (F0) 的可用区域（同样转小写，去除空格、中划线）
 echo "=== 正在查询支持 SpeechServices 免费层级 (F0) 的可用区域 ==="
 SPEECH_REGIONS=$(az cognitiveservices account list-skus \
     --kind SpeechServices \
     --query "[?name=='F0'].locations[]" \
-    --output tsv | tr -d ' ' | tr '[:upper:]' '[:lower:]' | sort -u | grep -v '^$')
+    --output tsv | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]-_' | sort -u | grep -v '^$')
 
-# 4. 根据策略判断目标执行区域（使用 grep 精准匹配交集）
+# 4. 匹配交集
 if [ -n "$ALLOWED_POLICY_REGIONS" ]; then
     echo "检测到策略区域限制，将仅在限制区域内匹配创建..."
     mapfile -t TARGET_REGIONS < <(grep -Fxf <(echo "$ALLOWED_POLICY_REGIONS") <(echo "$SPEECH_REGIONS"))
