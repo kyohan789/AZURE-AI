@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
 
+# 版本标识与更新时间
+SCRIPT_VERSION="v1.2.0-async10"
+BUILD_TIME="2026-09-07"
+
 # ANSI 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
+
+# 最前置版本打印
+echo -e "${CYAN}=================================================="
+echo -e " Azure TTS 批量自动化部署脚本"
+echo -e " 版本: ${GREEN}${SCRIPT_VERSION}${CYAN} | 构建日期: ${GREEN}${BUILD_TIME}${CYAN}"
+echo -e "==================================================${NC}"
 
 MAX_JOBS=10
 
@@ -43,7 +53,7 @@ fi
 WORKDIR="/tmp/az_tts_$(date +%s)_$RANDOM"
 mkdir -p "$WORKDIR"
 
-# 单区域执行函数 (不使用 sed/awk 管道，直接原子执行)
+# 单区域执行函数
 deploy_worker() {
     local REGION="$1"
     local IDX="$2"
@@ -57,7 +67,7 @@ deploy_worker() {
     local NAME="${DATE}-${RANDOM_STR}"
     local RG_NAME="waz-${REGION}"
 
-    # 错峰 0.1~0.9 秒，防止并发争锁
+    # 错峰 0.1~0.9 秒避让锁争用
     sleep "0.$((RANDOM % 9 + 1))"
 
     echo "${PREFIX} >>> 开始创建资源组: ${RG_NAME}"
@@ -163,7 +173,7 @@ if [ ${#CLEANUP_RGS[@]} -gt 0 ]; then
     done
 fi
 
-# 汇总输出
+# 最终汇总展示
 echo ""
 echo "==================== 执行汇总 ===================="
 echo -e "总数: ${TOTAL} | ${GREEN}成功: ${#SUCCESS_LIST[@]}${NC} | ${RED}失败: ${#FAILED_LIST[@]}${NC}"
@@ -185,5 +195,4 @@ if [ ${#FAILED_LIST[@]} -gt 0 ]; then
 fi
 echo "=================================================="
 
-# 最终清理临时目录
 rm -rf "$WORKDIR"
