@@ -5,32 +5,29 @@ RESOURCE_GROUP="waz-eastus2"
 
 # 2. 查询策略中允许的区域限制
 echo "=== 正在检查策略区域限制 (Policy Restriction) ==="
-POLICY_JSON=$(az policy assignment list --query "[?name=='sys.regionrestriction'].parameters.listOfAllowedLocations.value" --output json)
+POLICY_RAW=$(az policy assignment list --query "[?name=='sys.regionrestriction'].parameters.listOfAllowedLocations.value" --output json 2>/dev/null)
 
-# 从 JSON 数组中提取所有区域，转换为纯小写并去除空格和引号
-ALLOWED_POLICY_REGIONS=$(echo "$POLICY_JSON" | grep -o '"[^"]*"' | tr -d '" ' | tr '[:upper:]' '[:lower:]' | sort -u)
+# 提取双引号内的区域代码，转小写、去空格
+ALLOWED_POLICY_REGIONS=$(echo "$POLICY_RAW" | grep -oE '"[a-zA-Z0-9]+"' | tr -d '"' | tr '[:upper:]' '[:lower:]' | sort -u)
 
-# 3. 查询 CognitiveServices 全球所有支持的标准物理区域 ID
-echo "=== 正在查询支持的可用区域 ==="
-ALL_SPEECH_REGIONS=$(az provider show --namespace Microsoft.CognitiveServices \
-    --query "resourceTypes[?resourceType=='accounts'].locations[]" \
-    --output tsv | tr -d ' ' | tr '[:upper:]' '[:lower:]' | sort -u)
+# 3. 获取 Azure 所有支持的标准物理区域列表
+echo "=== 正在查询标准物理区域 ==="
+ALL_REGIONS=$(az account list-locations --query "[?metadata.regionType=='Physical'].name" --output tsv | tr '[:upper:]' '[:lower:]' | sort -u)
 
-# 4. 判断区域：如果有策略限制，过滤匹配；否则使用全部区域
+# 4. 判断目标区域
 TARGET_REGIONS=()
 if [ -n "$ALLOWED_POLICY_REGIONS" ]; then
-    echo "检测到策略区域限制，提取到的策略区域:"
+    echo "检测到策略限制，允许的区域为:"
     echo "$ALLOWED_POLICY_REGIONS"
     
-    # 逐个匹配策略允许的区域
-    for r in $ALLOWED_POLICY_REGIONS; do
-        if echo "$ALL_SPEECH_REGIONS" | grep -qx "$r"; then
-            TARGET_REGIONS+=("$r")
-        fi
-    done
+    while read -r r; do
+        [ -n "$r" ] && TARGET_REGIONS+=("$r")
+    done < <(echo "$ALLOWED_POLICY_REGIONS")
 else
-    echo "未检测到策略限制，将针对所有区域运行..."
-    mapfile -t TARGET_REGIONS < <(echo "$ALL_SPEECH_REGIONS")
+    echo "未检测到策略限制，使用全部物理区域..."
+    while read -r r; do
+        [ -n "$r" ] && TARGET_REGIONS+=("$r")
+    done < <(echo "$ALL_REGIONS")
 fi
 
 TOTAL=${#TARGET_REGIONS[@]}
@@ -40,7 +37,7 @@ echo "待部署区域列表: ${TARGET_REGIONS[*]}"
 echo "=================================================="
 
 if [ "$TOTAL" -eq 0 ]; then
-    echo "没有匹配到需要创建的区域，请检查订阅策略或权限。"
+    echo "未获取到待部署区域，请检查策略名称或账号权限。"
     exit 0
 fi
 
@@ -50,7 +47,7 @@ FAILED_COUNT=0
 declare -a SUCCESS_LIST=()
 declare -a FAILED_LIST=()
 
-# 5. 遍历并创建服务 (层级: F0)
+# 5. 遍历并创建服务 (F0 免费层)
 CURRENT=0
 for REGION in "${TARGET_REGIONS[@]}"; do
     ((CURRENT++))
