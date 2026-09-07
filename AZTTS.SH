@@ -7,7 +7,7 @@ YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m' # 重置颜色
 
-# 最大并发进程数限制
+# 最大并发数限制
 MAX_JOBS=10
 
 # 1. 查询策略中允许的区域限制
@@ -44,9 +44,13 @@ fi
 WORKDIR=$(mktemp -d /tmp/azure_tts_async.XXXXXX)
 trap 'rm -rf "$WORKDIR"' EXIT
 
-# 单区域异步执行函数
+# 单区域异步执行函数（带序号与总数前缀）
 deploy_worker() {
     local REGION="$1"
+    local IDX="$2"
+    local TOT="$3"
+    local PREFIX="[${IDX}/${TOT} ${REGION}]"
+
     local DATE
     DATE=$(date +%Y%m%d)
     local RANDOM_STR
@@ -54,19 +58,20 @@ deploy_worker() {
     local NAME="${DATE}-${RANDOM_STR}"
     local RG_NAME="waz-${REGION}"
 
+    # 毫秒级轻微错峰扰动
     sleep "0.$((RANDOM % 9 + 1))"
 
-    echo "[${REGION}] >>> 开始创建资源组: ${RG_NAME}"
-    az group create --name "$RG_NAME" --location "$REGION" --output json 2>&1 | sed "s/^/[${REGION}-RG] /"
+    echo "${PREFIX} >>> 开始创建资源组: ${RG_NAME}"
+    az group create --name "$RG_NAME" --location "$REGION" --output json 2>&1 | sed "s/^/${PREFIX}-RG /"
     local RG_STATUS=${PIPESTATUS[0]}
 
     if [ $RG_STATUS -ne 0 ]; then
-        echo -e "${RED}[${REGION}] [-] 资源组创建失败！${NC}"
+        echo -e "${RED}${PREFIX} [-] 资源组创建失败！${NC}"
         echo "FAILED|${REGION}|${RG_NAME}|RG_FAIL" > "${WORKDIR}/${REGION}.status"
         return
     fi
 
-    echo "[${REGION}] >>> 开始创建语音服务: ${NAME} (F0)"
+    echo "${PREFIX} >>> 开始创建语音服务: ${NAME} (F0)"
     az cognitiveservices account create \
         --name "$NAME" \
         --resource-group "$RG_NAME" \
@@ -74,7 +79,7 @@ deploy_worker() {
         --sku F0 \
         --location "$REGION" \
         --yes \
-        --output json 2>&1 | sed "s/^/[${REGION}-COG] /"
+        --output json 2>&1 | sed "s/^/${PREFIX}-COG /"
     local COG_STATUS=${PIPESTATUS[0]}
 
     if [ $COG_STATUS -eq 0 ]; then
@@ -92,41 +97,41 @@ deploy_worker() {
             --query "key1" \
             --output tsv 2>/dev/null)
 
-        echo -e "${GREEN}[${REGION}] [+] 创建成功！${NC}"
+        echo -e "${GREEN}${PREFIX} [+] 创建成功！${NC}"
         echo "SUCCESS|${REGION}|${RG_NAME}|${NAME}|${ENDPOINT}|${KEY}" > "${WORKDIR}/${REGION}.status"
     else
-        echo -e "${RED}[${REGION}] [-] 语音服务创建失败！${NC}"
+        echo -e "${RED}${PREFIX} [-] 语音服务创建失败！${NC}"
         echo "FAILED|${REGION}|${RG_NAME}|COG_FAIL" > "${WORKDIR}/${REGION}.status"
     fi
 }
 
 echo -e "${CYAN}=== 开始并发部署 (并发窗口: ${MAX_JOBS}) ===${NC}"
 
-# 使用命名管道 FIFO 实现并发槽位控制
+# 使用 FIFO 命名管道控制并发上限
 FIFO_PATH="${WORKDIR}/job_queue"
 mkfifo "$FIFO_PATH"
 exec 6<>"$FIFO_PATH"
 rm -f "$FIFO_PATH"
 
-# 预先向管道压入 MAX_JOBS 个 token
+# 填充令牌
 for ((i=0; i<MAX_JOBS; i++)); do
     echo >&6
 done
 
-# 循环派发任务
+# 带索引派发任务
+INDEX=0
 for REGION in "${TARGET_REGIONS[@]}"; do
-    # 获取一个并发槽（若无则阻塞等待）
+    ((INDEX++))
     read -r -u 6
     {
-        deploy_worker "$REGION"
-        # 归还并发槽
+        deploy_worker "$REGION" "$INDEX" "$TOTAL"
         echo >&6
     } &
 done
 
-# 等待所有后台子进程完成
+# 等待后台任务全部执行完成
 wait
-exec 6>&- # 关闭并释放文件描述符
+exec 6>&- # 关闭管道
 
 echo "=================================================="
 echo "所有任务执行完成，正在汇总结果..."
@@ -152,7 +157,7 @@ for REGION in "${TARGET_REGIONS[@]}"; do
     fi
 done
 
-# 清理失败资源组
+# 清理失败的资源组
 if [ ${#CLEANUP_RGS[@]} -gt 0 ]; then
     echo ""
     echo -e "${YELLOW}==================== 清理失败资源组 ====================${NC}"
