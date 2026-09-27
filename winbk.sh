@@ -37,7 +37,8 @@ echo "      -> 第 1 步完成，用时: $((STEP1_TIME / 60)) 分 $((STEP1_TIME 
 
 echo "[2/4] 启用全核心多线程并发打包到 ${ARCHIVE_FILE}..."
 STEP2_START=$SECONDS
-tar --exclude="*0515.7z" \
+tar --warning=no-file-changed \
+    --exclude="*0515.7z" \
     --exclude="*MT4.7z*" \
     --exclude="*MS.7z*" \
     --exclude="*/Logs/*" \
@@ -49,7 +50,13 @@ tar --exclude="*0515.7z" \
   -cvf "$ARCHIVE_FILE" \
   -C /c/Users/Administrator Desktop Downloads \
   > "$OUT_LOG" 2> "$ERR_LOG"
-TAR_STATUS=$?
+RAW_STATUS=$?
+# 代码 0 (正常) 或 1 (仅警告/动态文件变动) 均判定为成功
+if [ $RAW_STATUS -le 1 ]; then
+  TAR_STATUS=0
+else
+  TAR_STATUS=$RAW_STATUS
+fi
 STEP2_TIME=$(( SECONDS - STEP2_START ))
 echo "      -> 第 2 步完成，用时: $((STEP2_TIME / 60)) 分 $((STEP2_TIME % 60)) 秒 (${STEP2_TIME}s)"
 
@@ -82,7 +89,7 @@ echo "第 4 步 [一致性比对] : $((STEP4_TIME / 60)) 分 $((STEP4_TIME % 60)
 echo "--------------------------------------------------------"
 echo "脚本总执行时间       : $((TOTAL_ELAPSED / 60)) 分 $((TOTAL_ELAPSED % 60)) 秒 (${TOTAL_ELAPSED}s)"
 echo -e "\n==================== 打包执行与核对报告 ================"
-echo "执行状态     : $( [ $TAR_STATUS -eq 0 ] && echo '成功' || echo "退出代码 $TAR_STATUS" )"
+echo "执行状态     : $( [ $TAR_STATUS -eq 0 ] && echo '成功 (已忽略文件变更警告)' || echo "退出代码 $RAW_STATUS" )"
 echo "压缩算法     : Zstandard (zstd -1 -T0 多核多线程)"
 echo "双目录总项目 : $TOTAL_ITEMS 项 (Desktop + Downloads)"
 echo "已归档项目数 : $PACKED_COUNT 项"
