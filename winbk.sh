@@ -8,13 +8,24 @@ TOTAL_START=$SECONDS; \
 echo "[1/4] 扫描 Desktop 与 Downloads 实际总项目数与排除清单..."; \
 STEP1_START=$SECONDS; \
 TOTAL_ITEMS=$(find /c/Users/Administrator/Desktop /c/Users/Administrator/Downloads 2>/dev/null | wc -l); \
-find /c/Users/Administrator/Desktop /c/Users/Administrator/Downloads \( -name "*0515.7z" -o -path "*/Logs/*" -o -path "*MTD_TJ*" -o -name "*.hst" -o -name "*.hcc" -o -name "*.hc" \) > "$SKIP_LOG" 2>/dev/null; \
+find /c/Users/Administrator/Desktop /c/Users/Administrator/Downloads \( \
+  -name "*0515.7z" \
+  -o -name "*MT4.7z*" \
+  -o -name "*MS.7z*" \
+  -o -path "*/Logs/*" \
+  -o -path "*MTD_TJ*" \
+  -o -name "*.hst" \
+  -o -name "*.hcc" \
+  -o -name "*.hc" \
+\) > "$SKIP_LOG" 2>/dev/null; \
 STEP1_TIME=$(( SECONDS - STEP1_START )); \
 echo "      -> 第 1 步完成，用时: $((STEP1_TIME / 60)) 分 $((STEP1_TIME % 60)) 秒 (${STEP1_TIME}s)"; \
 \
 echo "[2/4] 开始打包 Desktop 与 Downloads 到 ${ARCHIVE_FILE}..."; \
 STEP2_START=$SECONDS; \
 tar --exclude="*0515.7z" \
+    --exclude="*MT4.7z*" \
+    --exclude="*MS.7z*" \
     --exclude="*/Logs/*" \
     --exclude="*MTD_TJ*" \
     --exclude="*.hst" \
