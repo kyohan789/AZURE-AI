@@ -26,6 +26,8 @@ find /c/Users/Administrator/Desktop /c/Users/Administrator/Downloads \( \
   -name "*0515.7z" \
   -o -name "*MT4.7z*" \
   -o -name "*MS.7z*" \
+  -o -name "*AI-1.7z*" \
+  -o -name "*.csv" \
   -o -path "*/Logs/*" \
   -o -path "*MTD_TJ*" \
   -o -name "*.hst" \
@@ -41,6 +43,8 @@ tar --warning=no-file-changed \
     --exclude="*0515.7z" \
     --exclude="*MT4.7z*" \
     --exclude="*MS.7z*" \
+    --exclude="*AI-1.7z*" \
+    --exclude="*.csv" \
     --exclude="*/Logs/*" \
     --exclude="*MTD_TJ*" \
     --exclude="*.hst" \
@@ -51,7 +55,6 @@ tar --warning=no-file-changed \
   -C /c/Users/Administrator Desktop Downloads \
   > "$OUT_LOG" 2> "$ERR_LOG"
 RAW_STATUS=$?
-# 代码 0 (正常) 或 1 (仅警告/动态文件变动) 均判定为成功
 if [ $RAW_STATUS -le 1 ]; then
   TAR_STATUS=0
 else
