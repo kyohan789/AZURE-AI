@@ -1,18 +1,18 @@
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S"); \
-ARCHIVE_FILE="/c/desktop_${TIMESTAMP}.tar.gz"; \
+ARCHIVE_FILE="/c/backup_${TIMESTAMP}.tar.gz"; \
 OUT_LOG="/c/tar_output_${TIMESTAMP}.log"; \
 ERR_LOG="/c/tar_error_${TIMESTAMP}.log"; \
 SKIP_LOG="/c/tar_skipped_${TIMESTAMP}.log"; \
 TOTAL_START=$SECONDS; \
 \
-echo "[1/4] 扫描桌面实际总项目数与排除清单..."; \
+echo "[1/4] 扫描 Desktop 与 Downloads 实际总项目数与排除清单..."; \
 STEP1_START=$SECONDS; \
-TOTAL_ITEMS=$(find /c/Users/Administrator/Desktop | wc -l); \
-find /c/Users/Administrator/Desktop \( -name "*0515.7z" -o -path "*/Logs/*" -o -path "*MTD_TJ*" -o -name "*.hst" -o -name "*.hcc" -o -name "*.hc" \) > "$SKIP_LOG" 2>/dev/null; \
+TOTAL_ITEMS=$(find /c/Users/Administrator/Desktop /c/Users/Administrator/Downloads 2>/dev/null | wc -l); \
+find /c/Users/Administrator/Desktop /c/Users/Administrator/Downloads \( -name "*0515.7z" -o -path "*/Logs/*" -o -path "*MTD_TJ*" -o -name "*.hst" -o -name "*.hcc" -o -name "*.hc" \) > "$SKIP_LOG" 2>/dev/null; \
 STEP1_TIME=$(( SECONDS - STEP1_START )); \
 echo "      -> 第 1 步完成，用时: $((STEP1_TIME / 60)) 分 $((STEP1_TIME % 60)) 秒 (${STEP1_TIME}s)"; \
 \
-echo "[2/4] 开始打包桌面到 ${ARCHIVE_FILE}..."; \
+echo "[2/4] 开始打包 Desktop 与 Downloads 到 ${ARCHIVE_FILE}..."; \
 STEP2_START=$SECONDS; \
 tar --exclude="*0515.7z" \
     --exclude="*/Logs/*" \
@@ -22,7 +22,7 @@ tar --exclude="*0515.7z" \
     --exclude="*.hc" \
   -I 'gzip -1' \
   -cvf "$ARCHIVE_FILE" \
-  -C /c/Users/Administrator Desktop \
+  -C /c/Users/Administrator Desktop Downloads \
   > "$OUT_LOG" 2> "$ERR_LOG"; \
 TAR_STATUS=$?; \
 STEP2_TIME=$(( SECONDS - STEP2_START )); \
@@ -58,7 +58,7 @@ echo "--------------------------------------------------------"; \
 echo "脚本总执行时间       : $((TOTAL_ELAPSED / 60)) 分 $((TOTAL_ELAPSED % 60)) 秒 (${TOTAL_ELAPSED}s)"; \
 echo -e "\n==================== 打包执行与核对报告 ================"; \
 echo "执行状态     : $( [ $TAR_STATUS -eq 0 ] && echo '成功' || echo "退出代码 $TAR_STATUS" )"; \
-echo "桌面总项目数 : $TOTAL_ITEMS 项"; \
+echo "双目录总项目 : $TOTAL_ITEMS 项 (Desktop + Downloads)"; \
 echo "已归档项目数 : $PACKED_COUNT 项"; \
 echo "规则排除项目 : $SKIPPED_COUNT 项"; \
 echo "账面总计处理 : $ACCOUNTED 项"; \
