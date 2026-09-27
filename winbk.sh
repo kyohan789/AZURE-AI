@@ -19,27 +19,28 @@ ERR_LOG="/c/tar_error_${TIMESTAMP}.log"
 SKIP_LOG="/c/tar_skipped_${TIMESTAMP}.log"
 TOTAL_START=$SECONDS
 
-echo "[1/4] 扫描 Desktop 与 Downloads 实际总项目数与排除清单..."
+echo "[1/4] 扫描 Desktop 与 Downloads 实际总项目数与排除清单 (忽略大小写)..."
 STEP1_START=$SECONDS
 TOTAL_ITEMS=$(find /c/Users/Administrator/Desktop /c/Users/Administrator/Downloads 2>/dev/null | wc -l)
 find /c/Users/Administrator/Desktop /c/Users/Administrator/Downloads \( \
-  -name "*0515.7z" \
-  -o -name "*MT4.7z*" \
-  -o -name "*MS.7z*" \
-  -o -name "*AI-1.7z*" \
-  -o -name "*.csv" \
-  -o -path "*/Logs/*" \
-  -o -path "*MTD_TJ*" \
-  -o -name "*.hst" \
-  -o -name "*.hcc" \
-  -o -name "*.hc" \
+  -iname "*0515.7z" \
+  -o -iname "*MT4.7z*" \
+  -o -iname "*MS.7z*" \
+  -o -iname "*AI-1.7z*" \
+  -o -iname "*.csv" \
+  -o -ipath "*/Logs/*" \
+  -o -ipath "*MTD_TJ*" \
+  -o -iname "*.hst" \
+  -o -iname "*.hcc" \
+  -o -iname "*.hc" \
 \) > "$SKIP_LOG" 2>/dev/null
 STEP1_TIME=$(( SECONDS - STEP1_START ))
 echo "      -> 第 1 步完成，用时: $((STEP1_TIME / 60)) 分 $((STEP1_TIME % 60)) 秒 (${STEP1_TIME}s)"
 
-echo "[2/4] 启用全核心多线程并发打包到 ${ARCHIVE_FILE}..."
+echo "[2/4] 启用全核心多线程并发打包到 ${ARCHIVE_FILE} (忽略大小写)..."
 STEP2_START=$SECONDS
-tar --warning=no-file-changed \
+tar --ignore-case \
+    --warning=no-file-changed \
     --exclude="*0515.7z" \
     --exclude="*MT4.7z*" \
     --exclude="*MS.7z*" \
