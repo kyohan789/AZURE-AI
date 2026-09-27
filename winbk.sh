@@ -6,9 +6,14 @@ SKIP_LOG="/c/tar_skipped_${TIMESTAMP}.log"; \
 START_TIME=$SECONDS; \
 echo "[1/4] 扫描桌面实际总项目数与排除清单..."; \
 TOTAL_ITEMS=$(find /c/Users/Administrator/Desktop | wc -l); \
-find /c/Users/Administrator/Desktop \( -name "*0515.7z" -o -path "*/Logs/*" -o -path "*MTD_TJ*" -o -name "*.hst" \) > "$SKIP_LOG" 2>/dev/null; \
+find /c/Users/Administrator/Desktop \( -name "*0515.7z" -o -path "*/Logs/*" -o -path "*MTD_TJ*" -o -name "*.hst" -o -name "*.hcc" -o -name "*.hc" \) > "$SKIP_LOG" 2>/dev/null; \
 echo "[2/4] 开始打包桌面到 ${ARCHIVE_FILE}..."; \
-tar --exclude="*0515.7z" --exclude="*/Logs/*" --exclude="*MTD_TJ*" --exclude="*.hst" \
+tar --exclude="*0515.7z" \
+    --exclude="*/Logs/*" \
+    --exclude="*MTD_TJ*" \
+    --exclude="*.hst" \
+    --exclude="*.hcc" \
+    --exclude="*.hc" \
   -I 'gzip -1' \
   -cvf "$ARCHIVE_FILE" \
   -C /c/Users/Administrator Desktop \
