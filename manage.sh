@@ -2,25 +2,42 @@
 
 DEFAULT_PORT=11885
 
-# 自动探测 Hysteria 2 正在监听的 UDP 端口
+# 自动探测 Hysteria 2 监听端口 (兼容 IPv4 与 IPv6 udp6)
 detect_hysteria_port() {
     local port=""
+    
+    # 方案 1: ss 命令 (支持 udp4 和 udp6)
     if command -v ss >/dev/null 2>&1; then
-        port=$(ss -ulnp 2>/dev/null | grep -iE 'hysteria|hy2' | awk '{print $5}' | awk -F':' '{print $NF}' | head -n 1)
-    fi
-    if [ -z "$port" ] && command -v netstat >/dev/null 2>&1; then
-        port=$(netstat -ulnp 2>/dev/null | grep -iE 'hysteria|hy2' | awk '{print $4}' | awk -F':' '{print $NF}' | head -n 1)
-    fi
-    if [ -z "$port" ] && command -v lsof >/dev/null 2>&1; then
-        port=$(lsof -iUDP -sUDP:LISTEN -n -P 2>/dev/null | grep -iE 'hysteria|hy2' | awk '{print $9}' | awk -F':' '{print $NF}' | head -n 1)
+        port=$(ss -uanp 2>/dev/null | grep -iE 'hysteria|hy2' | grep -oE ':[0-9]+' | tr -d ':' | head -n 1)
     fi
 
-    if [ -n "$port" ] && [[ "$port" =~ ^[0-9]+$ ]]; then
+    # 方案 2: netstat 命令 (备用)
+    if [ -z "$port" ] && command -v netstat >/dev/null 2>&1; then
+        port=$(netstat -uanp 2>/dev/null | grep -iE 'hysteria|hy2' | grep -oE ':[0-9]+' | tr -d ':' | head -n 1)
+    fi
+
+    # 方案 3: lsof 命令 (备用)
+    if [ -z "$port" ] && command -v lsof >/dev/null 2>&1; then
+        port=$(lsof -iUDP -n -P 2>/dev/null | grep -iE 'hysteria|hy2' | grep -oE ':[0-9]+' | tr -d ':' | head -n 1)
+    fi
+
+    # 方案 4: 直接从进程 PID 关联文件描述符探测 (终极保底)
+    if [ -z "$port" ]; then
+        local pid=$(pgrep -i -f hysteria | head -n 1)
+        if [ -n "$pid" ] && [ -d "/proc/$pid/net" ]; then
+            local hex_port=$(awk '$2 ~ /^[0-9A-F]+:[0-9A-F]+/ {print $2}' /proc/$pid/net/udp* 2>/dev/null | awk -F':' '{print $2}' | head -n 1)
+            if [ -n "$hex_port" ]; then
+                port=$((16#$hex_port))
+            fi
+        fi
+    fi
+
+    if [ -n "$port" ] && [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -gt 0 ]; then
         HY2_PORT="$port"
-        echo "[+] 成功自动探测到 Hysteria 2 活跃端口: ${HY2_PORT}"
+        echo "[+] 成功探测到 Hysteria 2 活跃监听端口: ${HY2_PORT}"
     else
         HY2_PORT="$DEFAULT_PORT"
-        echo "[-] 未自动探测到活跃的 Hysteria 2 进程，采用默认配置端口: ${HY2_PORT}"
+        echo "[-] 未自动探测到端口，使用默认端口: ${HY2_PORT}"
     fi
 }
 
