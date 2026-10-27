@@ -5,15 +5,12 @@ DEFAULT_PORT=11885
 # 自动探测 Hysteria 2 正在监听的 UDP 端口
 detect_hysteria_port() {
     local port=""
-    # 优先使用 ss
     if command -v ss >/dev/null 2>&1; then
         port=$(ss -ulnp 2>/dev/null | grep -iE 'hysteria|hy2' | awk '{print $5}' | awk -F':' '{print $NF}' | head -n 1)
     fi
-    # 备用方案 netstat
     if [ -z "$port" ] && command -v netstat >/dev/null 2>&1; then
         port=$(netstat -ulnp 2>/dev/null | grep -iE 'hysteria|hy2' | awk '{print $4}' | awk -F':' '{print $NF}' | head -n 1)
     fi
-    # 备用方案 lsof
     if [ -z "$port" ] && command -v lsof >/dev/null 2>&1; then
         port=$(lsof -iUDP -sUDP:LISTEN -n -P 2>/dev/null | grep -iE 'hysteria|hy2' | awk '{print $9}' | awk -F':' '{print $NF}' | head -n 1)
     fi
@@ -64,25 +61,23 @@ case "$choice" in
         echo "[+] 启动模式一：仅使用 UDPspeeder..."
         nohup ./speederv2_amd64 -s -l0.0.0.0:21885 -r127.0.0.1:${HY2_PORT} \
             -f20:10 -k "speeder_pass_all" --mode 1 -q 2 --timeout 30 --mtu 1450 > speeder.log 2>&1 &
-        echo "[+] 启动成功！已转发至 127.0.0.1:${HY2_PORT}，请确认防火墙/安全组放行 UDP 21885"
+        echo "[+] 启动成功！已转发至 127.0.0.1:${HY2_PORT}，请确认防火墙放行 UDP 21885"
         ;;
     2)
         clean_process
         echo "[+] 启动模式二：仅使用 udp2raw..."
         nohup ./udp2raw_amd64 -s -l0.0.0.0:31885 -r127.0.0.1:${HY2_PORT} \
-            -k "raw_pass_all" --raw-mode faketcp -a --cipher-mode none --auth-mode none > udp2raw.log 2>&1 &
-        echo "[+] 启动成功！已转发至 127.0.0.1:${HY2_PORT}，请确认防火墙/安全组放行 TCP 31885"
+            -k "raw_pass_all" --raw-mode faketcp -a --cipher-mode none --auth-mode none --mtu-warn 1500 > udp2raw.log 2>&1 &
+        echo "[+] 启动成功！已转发至 127.0.0.1:${HY2_PORT}，请确认防火墙放行 TCP 31885"
         ;;
     3)
         clean_process
         echo "[+] 启动模式三：联合加速部署中..."
-        # 内部 speeder 转发至真实探测到的 Hysteria 端口
         nohup ./speederv2_amd64 -s -l127.0.0.1:21885 -r127.0.0.1:${HY2_PORT} \
             -f20:10 -k "speeder_pass_all" --mode 1 -q 2 --timeout 30 --mtu 1450 > speeder.log 2>&1 &
-        # 外层 udp2raw 监听公网 31885 转发至 speeder 端口
         nohup ./udp2raw_amd64 -s -l0.0.0.0:31885 -r127.0.0.1:21885 \
-            -k "raw_pass_all" --raw-mode faketcp -a --cipher-mode none --auth-mode none > udp2raw.log 2>&1 &
-        echo "[+] 启动成功！已串联转发至 127.0.0.1:${HY2_PORT}，请确认防火墙/安全组放行 TCP 31885"
+            -k "raw_pass_all" --raw-mode faketcp -a --cipher-mode none --auth-mode none --mtu-warn 1500 > udp2raw.log 2>&1 &
+        echo "[+] 启动成功！已串联转发至 127.0.0.1:${HY2_PORT}，请确认防火墙放行 TCP 31885"
         ;;
     4)
         clean_process
