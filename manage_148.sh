@@ -41,7 +41,7 @@ case "$choice" in
         clean_process
         echo "[+] 启动模式二：仅使用 udp2raw..."
         nohup ./udp2raw_amd64 -s -l0.0.0.0:31885 -r127.0.0.1:11885 \
-            -k "raw_pass_148" --raw-mode faketcp -a --cipher-mode none --auth-mode none --lower-level > udp2raw.log 2>&1 &
+            -k "raw_pass_148" --raw-mode faketcp -a --cipher-mode none --auth-mode none > udp2raw.log 2>&1 &
         echo "[+] 启动成功！请确认防火墙/安全组已放行 TCP 31885 端口"
         ;;
     3)
@@ -50,7 +50,7 @@ case "$choice" in
         nohup ./speederv2_amd64 -s -l127.0.0.1:21885 -r127.0.0.1:11885 \
             -f20:10 -k "speeder_pass_148" --mode 1 -q 2 --timeout 30 --mtu 1450 > speeder.log 2>&1 &
         nohup ./udp2raw_amd64 -s -l0.0.0.0:31885 -r127.0.0.1:21885 \
-            -k "raw_pass_148" --raw-mode faketcp -a --cipher-mode none --auth-mode none --lower-level > udp2raw.log 2>&1 &
+            -k "raw_pass_148" --raw-mode faketcp -a --cipher-mode none --auth-mode none > udp2raw.log 2>&1 &
         echo "[+] 启动成功！请确认防火墙/安全组已放行 TCP 31885 端口"
         ;;
     4)
